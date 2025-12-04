@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>班級抽獎系統 (遠距離模式)</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
+
+  <style>
+    body {
+      background-color: #1e1e1e;
+      color: white;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h1 { margin-bottom: 10px; }
+
+    .container {
+      position: relative;
+      /* 16:9 寬螢幕比例 */
+      width: 960px;  
+      height: 540px;
+      background-color: #000;
+      border: 2px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
+    }
+
+    video { display: none; }
+    
+    canvas {
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1); /* 鏡像翻轉，讓畫面跟鏡子一樣 */
+    }
+
+    .controls {
+      margin-top: 20px;
+      display: flex;
+      gap: 15px;
+    }
+
+    button {
+      padding: 12px 24px;
+      font-size: 1.3rem;
+      cursor: pointer;
+      background: linear-gradient(135deg, #007bff, #0056b3);
+      color: white;
+      border: none;
+      border-radius: 50px;
+      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+
+    button:hover { 
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(0,0,0,0.4);
+    }
+    
+    button:active { transform: translateY(0); }
+
+    button:disabled { 
+      background: #555; 
+      cursor: not-allowed; 
+      transform: none;
+      box-shadow: none;
+    }
+
+    #status { margin-top: 10px; color: #aaa; font-size: 0.9rem; }
+    
+    #winner-display {
+      margin-top: 15px;
+      font-size: 1.8rem;
+      font-weight: bold;
+      color: #ffd700;
+      height: 40px;
+      text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🏆 班級抽獎系統 (遠距離增強版)</h1>
+  
+  <div class="container">
+    <video id="input_video"></video>
+    <canvas id="output_canvas" width="1280" height="720"></canvas>
+  </div>
+
+  <div id="status">正在初始化...請稍候</div>
+  <div id="winner-display"></div>
+
+  <div class="controls">
+    <button id="draw-btn" disabled>🎲 開始抽獎</button>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const drawBtn = document.getElementById('draw-btn');
+    const statusText = document.getElementById('status');
+    const winnerDisplay = document.getElementById('winner-display');
+
+    let detectedFaces = []; 
+    let isRolling = false;  
+    let winnerIndex = -1;   
+
+    // --- 設定開始 ---
+    const faceDetection = new FaceDetection({
+      locateFile: (file) => {
+        // 自動去 CDN 下載需要的模型檔 (包含 full range 模型)
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
+      }
+    });
+
+    faceDetection.setOptions({
+      model: 'full', // <--- 已改為遠距離模式 (full)
+      minDetectionConfidence: 0.5, // 如果太遠抓不到，可以試著調低到 0.4
+      selfieMode: false
+    });
+    // --- 設定結束 ---
+
+    faceDetection.onResults(onResults);
+
+    function onResults(results) {
+      statusText.innerText = `系統就緒 | 畫面人數: ${results.detections.length} (遠距模式)`;
+      
+      if (!isRolling && results.detections.length > 0) {
+        drawBtn.disabled = false;
+      } else {
+        drawBtn.disabled = true;
+      }
+
+      // 清除畫布
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      
+      // 繪製影像
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      detectedFaces = results.detections;
+
+      if (detectedFaces.length > 0) {
+        detectedFaces.forEach((detection, index) => {
+          const box = detection.boundingBox;
+          const w = box.width * canvasElement.width;
+          const h = box.height * canvasElement.height;
+          const x = box.xCenter * canvasElement.width - (w / 2);
+          const y = box.yCenter * canvasElement.height - (h / 2);
+
+          let color = 'rgba(255, 255, 255, 0.5)'; 
+          let lineWidth = 2;
+
+          // 抽獎邏輯的視覺效果
+          if (index === winnerIndex) {
+            if (isRolling) {
+              color = '#00CCFF'; // 抽獎中：藍色
+              lineWidth = 4;
+            } else {
+              color = '#FF0033'; // 中獎後：紅色
+              lineWidth = 8;
+            }
+          }
+
+          canvasCtx.save();
+          canvasCtx.beginPath();
+          canvasCtx.rect(x, y, w, h);
+          canvasCtx.lineWidth = lineWidth;
+          canvasCtx.strokeStyle = color;
+          
+          // 中獎發光
+          if (index === winnerIndex && !isRolling) {
+            canvasCtx.shadowColor = "red";
+            canvasCtx.shadowBlur = 20;
+          }
+          canvasCtx.stroke();
+          canvasCtx.restore();
+
+          // 畫驚嘆號
+          if (index === winnerIndex && !isRolling) {
+            drawGoldenExclamation(x, y, w, h);
+          }
+        });
+      }
+    }
+
+    // 繪製金色驚嘆號的函式
+    function drawGoldenExclamation(x, y, w, h) {
+      const centerX = x + w / 2;
+      const bottomY = y - 40; 
+      
+      const dotSize = 15;     
+      const barWidth = 24;    
+      const barHeight = 80;   
+
+      const time = Date.now() / 200; 
+      const glowIntensity = Math.abs(Math.sin(time)) * 20 + 10; 
+
+      canvasCtx.save();
+      canvasCtx.shadowColor = "#FFD700"; 
+      canvasCtx.shadowBlur = glowIntensity; 
+      canvasCtx.fillStyle = "#FFD700";   
+      canvasCtx.strokeStyle = "#FFFFE0"; 
+      canvasCtx.lineWidth = 3;
+
+      // 棒子
+      const barX = centerX - barWidth / 2;
+      const barY = bottomY - dotSize * 2 - 15 - barHeight; 
+      roundRect(canvasCtx, barX, barY, barWidth, barHeight, 10, true, true);
+
+      // 圓點
+      const dotY = bottomY - dotSize;
+      canvasCtx.beginPath();
+      canvasCtx.arc(centerX, dotY, dotSize, 0, Math.PI * 2);
+      canvasCtx.fill();
+      canvasCtx.stroke(); 
+
+      canvasCtx.restore();
+    }
+
+    function roundRect(ctx, x, y, width, height, radius, fill, stroke) {
+      if (typeof stroke === 'undefined') { stroke = true; }
+      if (typeof radius === 'undefined') { radius = 5; }
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+      if (fill) { ctx.fill(); }
+      if (stroke) { ctx.stroke(); }
+    }
+
+    // 按鈕監聽
+    drawBtn.addEventListener('click', () => {
+      if (detectedFaces.length === 0) return;
+      isRolling = true;
+      winnerDisplay.innerText = "🎲 命運輪轉中...";
+      winnerIndex = -1;
+      let rollCount = 0;
+      const maxRolls = 30; 
+      const speed = 80;    
+      const interval = setInterval(() => {
+        winnerIndex = Math.floor(Math.random() * detectedFaces.length);
+        rollCount++;
+        if (rollCount >= maxRolls) {
+          clearInterval(interval);
+          isRolling = false; 
+          winnerDisplay.innerText = "✨✨ 天選之人誕生！ ✨✨";
+        }
+      }, speed); 
+    });
+
+    // 啟動攝影機
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await faceDetection.send({image: videoElement});
+      },
+      width: 1280,
+      height: 720
+    });
+    
+    statusText.innerText = "正在啟動攝影機 (下載遠距模型中，請稍候)...";
+    camera.start();
+  </script>
+</body>
+</html>
