@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>班級抽獎系統 (全平台通用版)</title>
+  <title>班級抽獎系統 (遠距增強版)</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
 
@@ -16,7 +16,6 @@
       align-items: center;
       margin: 0;
       padding: 10px;
-      /* 防止手機下拉重整 */
       overscroll-behavior: none;
     }
 
@@ -26,7 +25,7 @@
       position: relative;
       width: 100%;
       max-width: 960px;
-      /* 讓容器維持 16:9 比例 */
+      /* 保持 16:9 */
       aspect-ratio: 16/9;
       background-color: #000;
       border: 2px solid #333;
@@ -35,7 +34,6 @@
       box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
     }
 
-    /* 關鍵：加上 playsinline 屬性並隱藏原始影片 */
     video { 
       position: absolute; 
       visibility: hidden; 
@@ -46,7 +44,6 @@
     canvas {
       width: 100%;
       height: 100%;
-      /* 預設不翻轉 (後鏡頭模式)，如果是前鏡頭我們會用 JS 控制 */
       transform: scaleX(1); 
     }
 
@@ -67,7 +64,6 @@
       border: none;
       border-radius: 50px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-      /* 禁止手機上選取文字 */
       user-select: none; 
       -webkit-user-select: none;
     }
@@ -81,15 +77,8 @@
       box-shadow: none;
     }
 
-    /* 特別設計給「啟動」按鈕的樣式 */
-    #start-btn {
-      background: linear-gradient(135deg, #28a745, #218838);
-    }
-    
-    /* 特別設計給「切換鏡頭」的樣式 */
-    #switch-cam-btn {
-      background: linear-gradient(135deg, #6c757d, #5a6268);
-    }
+    #start-btn { background: linear-gradient(135deg, #28a745, #218838); }
+    #switch-cam-btn { background: linear-gradient(135deg, #6c757d, #5a6268); }
 
     #status { margin-top: 10px; color: #aaa; font-size: 0.9rem; text-align: center; }
     
@@ -106,7 +95,7 @@
 </head>
 <body>
 
-  <h1>🏆 班級抽獎系統 (行動版)</h1>
+  <h1>🏆 班級抽獎系統 (遠距增強版)</h1>
   
   <div class="container">
     <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
@@ -117,8 +106,8 @@
   <div id="winner-display"></div>
 
   <div class="controls">
-    <button id="start-btn">📸 啟動攝影機</button>
-    <button id="switch-cam-btn" style="display:none;">🔄 切換前後鏡頭</button>
+    <button id="start-btn">📸 啟動高畫質攝影機</button>
+    <button id="switch-cam-btn" style="display:none;">🔄 切換鏡頭</button>
     <button id="draw-btn" disabled>🎲 開始抽獎</button>
   </div>
 
@@ -130,7 +119,6 @@
     const startBtn = document.getElementById('start-btn');
     const switchBtn = document.getElementById('switch-cam-btn');
     const drawBtn = document.getElementById('draw-btn');
-    
     const statusText = document.getElementById('status');
     const winnerDisplay = document.getElementById('winner-display');
 
@@ -138,41 +126,39 @@
     let isRolling = false;  
     let winnerIndex = -1;   
     
-    // 攝影機控制變數
     let currentStream = null;
-    let useFrontCamera = false; // 預設使用後鏡頭 (拍全班)
+    let useFrontCamera = false; 
     let isCameraRunning = false;
 
-    // --- MediaPipe 設定 ---
+    // --- 設定開始 ---
     const faceDetection = new FaceDetection({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
-      }
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
     });
 
     faceDetection.setOptions({
-      model: 'full', // 遠距離模式
-      minDetectionConfidence: 0.5,
+      model: 'full', 
+      minDetectionConfidence: 0.3, // [關鍵修改] 降低門檻，越低越容易抓到遠處模糊的臉 (0.2~0.3 是極限)
       selfieMode: false 
     });
+    // --- 設定結束 ---
 
     faceDetection.onResults(onResults);
 
-    // --- 核心功能：啟動攝影機 (原生 getUserMedia) ---
     async function startCamera() {
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
 
-      statusText.innerText = "正在請求攝影機權限...";
+      statusText.innerText = "正在請求高畫質訊號...";
 
-      // 設定鏡頭參數
       const constraints = {
         audio: false,
         video: {
-          facingMode: useFrontCamera ? "user" : "environment", // user=前鏡頭, environment=後鏡頭
-          width: { ideal: 1280 }, // 嘗試請求高畫質，但不強制 (手機相容性較好)
-          height: { ideal: 720 }
+          facingMode: useFrontCamera ? "user" : "environment",
+          // [關鍵修改] 強制請求 1080p 以上解析度
+          // 手機如果支援就會給高畫質，遠處的人臉才會有足夠的像素
+          width: { ideal: 1920 }, 
+          height: { ideal: 1080 }
         }
       };
 
@@ -181,52 +167,46 @@
         currentStream = stream;
         videoElement.srcObject = stream;
         
-        // 等待影片載入完成
         videoElement.onloadedmetadata = () => {
           videoElement.play();
           isCameraRunning = true;
-          statusText.innerText = "系統運作中 | 等待偵測人臉...";
-          startBtn.style.display = 'none'; // 隱藏啟動按鈕
-          switchBtn.style.display = 'inline-block'; // 顯示切換按鈕
+          // 顯示目前的解析度，確認是否有成功開啟高畫質
+          statusText.innerText = `系統運作中 | 解析度: ${videoElement.videoWidth}x${videoElement.videoHeight}`;
+          startBtn.style.display = 'none';
+          switchBtn.style.display = 'inline-block';
           
-          // 根據鏡頭調整鏡像 (前鏡頭要翻轉，後鏡頭不用)
           if (useFrontCamera) {
             canvasElement.style.transform = "scaleX(-1)";
           } else {
             canvasElement.style.transform = "scaleX(1)";
           }
-
-          // 開始循環偵測
           detectLoop();
         };
       } catch (err) {
         console.error("攝影機啟動失敗:", err);
-        statusText.innerText = "錯誤：無法啟動攝影機 (請確認權限或網址是否為 HTTPS)";
-        alert("無法啟動攝影機！\n請確認：\n1. 網址必須是 HTTPS (Github Pages 或 ngrok)\n2. 請允許瀏覽器使用相機");
+        alert("無法啟動攝影機，請確認權限。\n(部分舊手機可能不支援高畫質，請重新整理試試)");
       }
     }
 
-    // --- 循環偵測函式 (取代原本的 Camera 工具) ---
     async function detectLoop() {
       if (!isCameraRunning) return;
       
-      // 確保影片有寬高才傳送
       if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
-        // 同步 Canvas 大小與影片一致 (避免變形)
         canvasElement.width = videoElement.videoWidth;
         canvasElement.height = videoElement.videoHeight;
-        
         await faceDetection.send({image: videoElement});
       }
-      
       requestAnimationFrame(detectLoop);
     }
 
-    // --- 繪圖與邏輯 ---
     function onResults(results) {
-      statusText.innerText = `系統運作中 | 偵測到 ${results.detections.length} 人`;
+      // 顯示即時人數
+      const count = results.detections.length;
+      if(isCameraRunning) {
+         statusText.innerText = `解析度: ${videoElement.videoWidth}x${videoElement.videoHeight} | 偵測人數: ${count}`;
+      }
       
-      if (!isRolling && results.detections.length > 0) {
+      if (!isRolling && count > 0) {
         drawBtn.disabled = false;
       } else {
         drawBtn.disabled = true;
@@ -245,23 +225,24 @@
           const x = box.xCenter * canvasElement.width - (w / 2);
           const y = box.yCenter * canvasElement.height - (h / 2);
 
-          let color = 'rgba(255, 255, 255, 0.5)'; 
-          let lineWidth = 2;
+          let color = 'rgba(255, 255, 255, 0.4)'; 
+          // [優化] 根據框的大小自動調整線條粗細，避免遠處的框太粗
+          let baseLineWidth = Math.max(1, w / 60); 
 
           if (index === winnerIndex) {
             if (isRolling) {
               color = '#00CCFF';
-              lineWidth = 5;
+              baseLineWidth *= 2;
             } else {
               color = '#FF0033';
-              lineWidth = 10;
+              baseLineWidth *= 3;
             }
           }
 
           canvasCtx.save();
           canvasCtx.beginPath();
           canvasCtx.rect(x, y, w, h);
-          canvasCtx.lineWidth = lineWidth;
+          canvasCtx.lineWidth = baseLineWidth;
           canvasCtx.strokeStyle = color;
           
           if (index === winnerIndex && !isRolling) {
@@ -278,11 +259,10 @@
       }
     }
 
-    // 繪製驚嘆號特效
     function drawGoldenExclamation(x, y, w, h) {
-      // 動態計算大小，避免人臉太遠時驚嘆號太大
-      const scale = w / 200; // 基準縮放
-      const actualScale = Math.max(0.5, Math.min(scale, 1.5)); // 限制縮放範圍
+      // [優化] 讓驚嘆號大小能適應遠距離的小人臉
+      const scale = w / 150; 
+      const actualScale = Math.max(0.4, scale); // 設定最小縮放比，避免太小看不見
 
       const centerX = x + w / 2;
       const bottomY = y - (20 * actualScale); 
@@ -331,24 +311,16 @@
       if (stroke) { ctx.stroke(); }
     }
 
-    // --- 按鈕事件綁定 ---
-    
-    // 1. 啟動按鈕 (手機必須手動點擊)
-    startBtn.addEventListener('click', () => {
+    startBtn.addEventListener('click', () => startCamera());
+    switchBtn.addEventListener('click', () => {
+      useFrontCamera = !useFrontCamera;
       startCamera();
     });
 
-    // 2. 切換鏡頭按鈕
-    switchBtn.addEventListener('click', () => {
-      useFrontCamera = !useFrontCamera;
-      startCamera(); // 重新啟動以套用新鏡頭
-    });
-
-    // 3. 抽獎按鈕
     drawBtn.addEventListener('click', () => {
       if (detectedFaces.length === 0) return;
       isRolling = true;
-      drawBtn.disabled = true; // 抽獎時禁止重複點擊
+      drawBtn.disabled = true;
       winnerDisplay.innerText = "🎲 命運輪轉中...";
       winnerIndex = -1;
       let rollCount = 0;
