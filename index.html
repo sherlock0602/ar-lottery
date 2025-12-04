@@ -269,11 +269,13 @@
         await faceDetection.send({image: videoElement});
       },
       width: 1280,
-      height: 720
+      height: 720,
+      facingMode: 'environment'
     });
     
     statusText.innerText = "正在啟動攝影機 (下載遠距模型中，請稍候)...";
     camera.start();
   </script>
 </body>
+
 </html>
