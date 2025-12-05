@@ -251,8 +251,8 @@
       let realY = clickY * scaleY;
 
       // 預設框大小 (約 80x120 像素，視解析度而定)
-      const w = canvasElement.width * 0.08;
-      const h = canvasElement.height * 0.12;
+      const w = canvasElement.width * 0.05;
+      const h = canvasElement.height * 0.08;
       
       // 確保框不會超出邊界
       const x = Math.max(0, Math.min(canvasElement.width - w, realX - w/2));
@@ -766,4 +766,5 @@
     });
   </script>
 </body>
+
 </html>
