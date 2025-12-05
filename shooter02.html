@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>班級抽獎系統 (上帝模式版)</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
+
+  <style>
+    body {
+      background-color: #1e1e1e;
+      color: white;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 10px;
+      overscroll-behavior: none;
+      /* 禁止選取，避免連點時反白 */
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    h1 { margin-bottom: 5px; font-size: 1.4rem; text-align: center;}
+
+    .container {
+      position: relative;
+      width: 100%;
+      max-width: 960px;
+      aspect-ratio: 16/9;
+      background-color: #000;
+      border: 2px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
+      cursor: crosshair; /* 鼠標變十字，提示可以點擊 */
+    }
+
+    video { 
+      position: absolute; 
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      z-index: -1;
+      opacity: 0;
+    }
+    
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .controls {
+      margin-top: 15px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .zoom-control {
+      width: 100%;
+      display: none; 
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      background: #333;
+      padding: 10px;
+      border-radius: 50px;
+    }
+    
+    .zoom-control label { font-size: 0.9rem; color: #ffd700; }
+    
+    input[type=range] {
+      width: 70%;
+      accent-color: #ffd700;
+      cursor: pointer;
+    }
+
+    button {
+      padding: 12px 24px;
+      font-size: 1.1rem;
+      cursor: pointer;
+      background: linear-gradient(135deg, #007bff, #0056b3);
+      color: white;
+      border: none;
+      border-radius: 50px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+
+    button:active { transform: translateY(2px); }
+    button:disabled { background: #555; color: #888; cursor: not-allowed; box-shadow: none; }
+
+    #start-btn { background: linear-gradient(135deg, #28a745, #218838); }
+    #switch-cam-btn { background: linear-gradient(135deg, #6c757d, #5a6268); }
+    #undo-btn { background: linear-gradient(135deg, #fd7e14, #e67e22); display: none; } /* 復原按鈕 */
+    #reset-btn { background: linear-gradient(135deg, #dc3545, #c82333); display: none; }
+
+    #status { margin-top: 10px; color: #aaa; font-size: 0.9rem; text-align: center; }
+    
+    #winner-display {
+      margin-top: 5px;
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #ffd700;
+      min-height: 30px;
+      text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+      text-align: center;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.85);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .modal-content {
+      background: #2b2b2b;
+      padding: 20px;
+      border-radius: 15px;
+      text-align: center;
+      border: 2px solid #ffd700;
+      box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
+      max-width: 90%;
+    }
+    
+    .modal-content h2 { color: #ffd700; margin-bottom: 15px; }
+
+    #winner-canvas {
+      border-radius: 10px;
+      border: 3px solid white;
+      margin-bottom: 15px;
+      background: #000;
+      max-width: 100%;
+      height: auto;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
+</head>
+<body>
+
+  <h1>🏆 班級抽獎系統 (上帝模式版)</h1>
+  
+  <div class="container" id="canvas-container">
+    <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
+    <canvas id="output_canvas"></canvas>
+  </div>
+
+  <div id="status">請按下「啟動相機」</div>
+  <div id="winner-display"></div>
+
+  <div class="controls">
+    <div class="zoom-control" id="zoom-area">
+      <label>🔍 遠距放大:</label>
+      <input type="range" id="zoom-slider" min="1" max="5" step="0.1" value="1">
+    </div>
+
+    <button id="start-btn">📸 啟動相機</button>
+    <button id="switch-cam-btn" style="display:none;">🔄 切換鏡頭</button>
+    <button id="undo-btn">↩️ 撤銷手動</button>
+    <button id="draw-btn" disabled>🎲 定格並抽獎</button>
+    <button id="reset-btn">🔄 重置</button>
+  </div>
+
+  <div class="modal-overlay" id="winner-modal">
+    <div class="modal-content">
+      <h2>✨ 幸運兒特寫 ✨</h2>
+      <canvas id="winner-canvas"></canvas>
+      <br>
+      <button onclick="closeModal()">關閉視窗</button>
+    </div>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d', { willReadFrequently: true });
+    
+    const startBtn = document.getElementById('start-btn');
+    const switchBtn = document.getElementById('switch-cam-btn');
+    const drawBtn = document.getElementById('draw-btn');
+    const resetBtn = document.getElementById('reset-btn');
+    const undoBtn = document.getElementById('undo-btn');
+    const statusText = document.getElementById('status');
+    const winnerDisplay = document.getElementById('winner-display');
+    const winnerModal = document.getElementById('winner-modal');
+    const winnerCanvas = document.getElementById('winner-canvas');
+    const winnerCtx = winnerCanvas.getContext('2d');
+    const zoomArea = document.getElementById('zoom-area');
+    const zoomSlider = document.getElementById('zoom-slider');
+
+    // 變數
+    let detectedFaces = []; // AI 抓到的
+    let manualFaces = [];   // [新增] 手動點擊加上的
+    let frozenFaces = [];   // 定格後的所有人臉
+    let isRolling = false;       
+    let isFrozen = false;        
+    let winnerIndex = -1;        
+    let currentStream = null;
+    let isCameraRunning = false;
+    let snapshotImage = null;
+    let useFrontCamera = false; 
+    let isModelLoaded = false;  
+    let videoTrack = null;
+    let zoomCap = null;
+
+    // 動畫變數
+    let isShooting = false;
+    let arrowProgress = 0;
+    let arrowStart = {x:0, y:0};
+    let arrowTarget = {x:0, y:0};
+    let explosionFrame = 0;
+
+    const faceDetection = new FaceDetection({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+    });
+
+    faceDetection.setOptions({
+      model: 'full', 
+      minDetectionConfidence: 0.3, 
+      selfieMode: false 
+    });
+
+    faceDetection.onResults(onResults);
+
+    // --- [新增] 手動點擊加框功能 ---
+    canvasElement.addEventListener('click', (event) => {
+      // 只有在「非定格」且「相機運作中」的狀態下才允許手動加人
+      if (!isCameraRunning || isFrozen) return;
+
+      const rect = canvasElement.getBoundingClientRect();
+      // 取得點擊在 Canvas 內的相對位置 (0~1)
+      let x = (event.clientX - rect.left) / rect.width;
+      let y = (event.clientY - rect.top) / rect.height;
+
+      // 如果是用前鏡頭 (有鏡像)，X 座標要翻轉
+      if (useFrontCamera) {
+        x = 1 - x;
+      }
+
+      // 建立一個假的 Face 對象
+      // 預設大小：寬度 0.08, 高度 0.12 (約佔畫面的 8%~12%，這是根據一般遠距人臉估算的)
+      const fakeFace = {
+        boundingBox: {
+          xCenter: x,
+          yCenter: y,
+          width: 0.08, 
+          height: 0.12 
+        },
+        isManual: true // 標記這是手動加的
+      };
+
+      manualFaces.push(fakeFace);
+      updateStatus(); // 更新按鈕狀態
+      
+      // 顯示撤銷按鈕
+      if (manualFaces.length > 0) {
+        undoBtn.style.display = 'inline-block';
+      }
+    });
+
+    // --- [新增] 撤銷最後一個手動框 ---
+    undoBtn.addEventListener('click', () => {
+      manualFaces.pop(); // 移除最後一個
+      if (manualFaces.length === 0) {
+        undoBtn.style.display = 'none';
+      }
+      updateStatus();
+    });
+
+    async function startCamera() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+      }
+      zoomArea.style.display = 'none';
+      statusText.innerText = "正在啟動相機 (請求高畫質)...";
+
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: useFrontCamera ? "user" : "environment",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
+      };
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        currentStream = stream;
+        videoTrack = stream.getVideoTracks()[0];
+        
+        const capabilities = videoTrack.getCapabilities();
+        if (capabilities.zoom) {
+          zoomCap = capabilities.zoom;
+          zoomSlider.min = zoomCap.min;
+          zoomSlider.max = zoomCap.max;
+          zoomSlider.step = zoomCap.step;
+          zoomSlider.value = zoomCap.min;
+          zoomArea.style.display = 'flex';
+          statusText.innerText = "支援硬體變焦！";
+        }
+        
+        videoElement.onloadedmetadata = () => {
+          videoElement.play();
+          isCameraRunning = true;
+          startBtn.style.display = 'none';
+          switchBtn.style.display = 'inline-block';
+          // 確保抽獎按鈕一開始是禁用的
+          updateStatus();
+          
+          if (useFrontCamera) {
+            canvasElement.style.transform = "scaleX(-1)";
+          } else {
+            canvasElement.style.transform = "scaleX(1)";
+          }
+          detectLoop();
+        };
+        videoElement.srcObject = stream;
+      } catch (err) {
+        console.error("相機錯誤:", err);
+        alert("無法啟動相機，請重整頁面。");
+      }
+    }
+
+    zoomSlider.addEventListener('input', () => {
+      if (videoTrack && zoomCap) {
+        videoTrack.applyConstraints({ advanced: [{ zoom: parseFloat(zoomSlider.value) }] });
+      }
+    });
+
+    async function detectLoop() {
+      if (!isCameraRunning) return;
+      
+      if (videoElement.videoWidth > 0) {
+        canvasElement.width = videoElement.videoWidth;
+        canvasElement.height = videoElement.videoHeight;
+
+        if (!isFrozen && !isModelLoaded) {
+             canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        }
+
+        if (!isFrozen) {
+           await faceDetection.send({image: videoElement});
+        }
+      }
+      
+      // 在定格模式下，需要不斷重繪 (為了跑動畫)
+      if (isFrozen) {
+        drawFrozenFrame();
+      } else {
+        // 在非定格模式下，如果沒有人臉但也需要繪製手動框框
+        // 注意：onResults 只在 AI 偵測到變化時觸發，所以這裡要補一個重繪機制給 manualFaces
+        // 但因為 onResults 更新頻率高，我們在 onResults 裡合併繪製即可
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+
+    function onResults(results) {
+      isModelLoaded = true; 
+      if (isFrozen) return; 
+
+      detectedFaces = results.detections;
+      
+      // 合併 AI 偵測到的 + 手動新增的
+      const allFaces = [...detectedFaces, ...manualFaces];
+
+      // 更新畫面文字
+      updateStatus(allFaces.length);
+
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+      
+      // 繪製所有框框
+      drawBoxes(allFaces);
+    }
+
+    function updateStatus(count = 0) {
+      // 這裡如果沒傳 count，就即時計算
+      if (count === 0) {
+        count = detectedFaces.length + manualFaces.length;
+      }
+
+      if (isCameraRunning && !isFrozen) {
+        const resText = `${videoElement.videoWidth}x${videoElement.videoHeight}`;
+        if (count > 0) {
+           drawBtn.disabled = false;
+           drawBtn.style.display = 'inline-block';
+           statusText.innerText = `準備就緒 | 畫質: ${resText} | 總人數: ${count} (手動: ${manualFaces.length})`;
+        } else {
+           drawBtn.disabled = true;
+           statusText.innerText = `點擊畫面可手動加人 | 畫質: ${resText}`;
+        }
+      }
+    }
+
+    function drawFrozenFrame() {
+      if (snapshotImage) {
+        canvasCtx.drawImage(snapshotImage, 0, 0);
+      }
+      drawBoxes(frozenFaces);
+      
+      if (isShooting) {
+        updateAndDrawArrow();
+      }
+    }
+
+    function prepareArrow() {
+      const startCorner = Math.random() > 0.5 ? 0 : canvasElement.width;
+      arrowStart = { x: startCorner, y: 0 };
+      
+      const detection = frozenFaces[winnerIndex];
+      const box = detection.boundingBox;
+      const tx = box.xCenter * canvasElement.width; 
+      const ty = box.yCenter * canvasElement.height; 
+      
+      arrowTarget = { x: tx, y: ty };
+      isShooting = true;
+      arrowProgress = 0;
+      explosionFrame = 0;
+    }
+
+    function updateAndDrawArrow() {
+      if (arrowProgress < 1) {
+        arrowProgress += 0.04; 
+      } else {
+        explosionFrame++;
+        if (explosionFrame > 15) {
+           isShooting = false; 
+           showWinnerDetail(winnerIndex); 
+           return;
+        }
+      }
+
+      const curX = arrowStart.x + (arrowTarget.x - arrowStart.x) * Math.min(arrowProgress, 1);
+      const curY = arrowStart.y + (arrowTarget.y - arrowStart.y) * Math.min(arrowProgress, 1);
+      const angle = Math.atan2(arrowTarget.y - arrowStart.y, arrowTarget.x - arrowStart.x);
+
+      if (arrowProgress <= 1) {
+        drawMagicArrow(curX, curY, angle);
+      }
+      
+      if (arrowProgress >= 1) {
+        drawExplosion(arrowTarget.x, arrowTarget.y, explosionFrame);
+      }
+    }
+
+    function drawMagicArrow(x, y, angle) {
+      canvasCtx.save();
+      canvasCtx.translate(x, y);
+      canvasCtx.rotate(angle);
+      canvasCtx.shadowColor = "#FFD700";
+      canvasCtx.shadowBlur = 15;
+      
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(-40, 0);
+      canvasCtx.lineTo(20, 0);
+      canvasCtx.lineWidth = 6;
+      canvasCtx.strokeStyle = "white";
+      canvasCtx.stroke();
+
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(20, -10);
+      canvasCtx.lineTo(40, 0);
+      canvasCtx.lineTo(20, 10);
+      canvasCtx.fillStyle = "#FFD700";
+      canvasCtx.fill();
+      
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(-40, 0);
+      canvasCtx.lineTo(-50, -10);
+      canvasCtx.lineTo(-45, 0);
+      canvasCtx.lineTo(-50, 10);
+      canvasCtx.fillStyle = "white";
+      canvasCtx.fill();
+      canvasCtx.restore();
+    }
+
+    function drawExplosion(x, y, frame) {
+      canvasCtx.save();
+      canvasCtx.translate(x, y);
+      const radius = frame * 5; 
+      const alpha = 1 - (frame / 15); 
+      canvasCtx.beginPath();
+      canvasCtx.arc(0, 0, radius, 0, Math.PI * 2);
+      canvasCtx.fillStyle = `rgba(255, 215, 0, ${alpha})`;
+      canvasCtx.fill();
+      canvasCtx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+      canvasCtx.lineWidth = 4;
+      for (let i = 0; i < 8; i++) {
+        canvasCtx.rotate(Math.PI / 4);
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(radius * 0.5, 0);
+        canvasCtx.lineTo(radius * 1.5, 0);
+        canvasCtx.stroke();
+      }
+      canvasCtx.restore();
+    }
+
+    function drawBoxes(faces) {
+      if (!faces) return;
+      faces.forEach((detection, index) => {
+        const box = detection.boundingBox;
+        const w = box.width * canvasElement.width;
+        const h = box.height * canvasElement.height;
+        const x = box.xCenter * canvasElement.width - (w / 2);
+        const y = box.yCenter * canvasElement.height - (h / 2);
+
+        let color = 'rgba(255, 255, 255, 0.4)';
+        
+        // 如果是手動加的，給它不一樣的顏色 (例如綠色)，方便區分
+        if (detection.isManual) {
+            color = 'rgba(0, 255, 127, 0.6)';
+        }
+
+        let lineWidth = Math.max(2, w / 80);
+
+        if (index === winnerIndex) {
+          if (isRolling) {
+            color = '#00CCFF'; 
+            lineWidth *= 2;
+          } else {
+            color = '#FF0033'; 
+            lineWidth *= 3;
+          }
+        }
+
+        canvasCtx.save();
+        canvasCtx.beginPath();
+        canvasCtx.rect(x, y, w, h);
+        canvasCtx.lineWidth = lineWidth;
+        canvasCtx.strokeStyle = color;
+
+        if (index === winnerIndex && !isRolling && isFrozen) {
+          canvasCtx.shadowColor = "red";
+          canvasCtx.shadowBlur = 20;
+        }
+        canvasCtx.stroke();
+        canvasCtx.restore();
+
+        if (index === winnerIndex && !isRolling && isFrozen && !isShooting) {
+          // 這裡保留驚嘆號，但主要是等箭射過來
+        }
+      });
+    }
+
+    drawBtn.addEventListener('click', () => {
+      // 抽獎時，將偵測到的 + 手動的 合併為 frozenFaces
+      const allFaces = [...detectedFaces, ...manualFaces];
+      if (allFaces.length === 0) return;
+
+      isFrozen = true;
+      frozenFaces = allFaces;
+      
+      snapshotImage = new Image();
+      snapshotImage.src = canvasElement.toDataURL();
+
+      drawBtn.style.display = 'none';
+      switchBtn.style.display = 'none'; 
+      zoomArea.style.display = 'none'; 
+      undoBtn.style.display = 'none'; // 抽獎開始後隱藏撤銷
+      resetBtn.style.display = 'inline-block';
+      statusText.innerText = "🔒 畫面已鎖定 | 抽獎中...";
+
+      isRolling = true;
+      winnerDisplay.innerText = "🎲 命運輪轉中...";
+      winnerIndex = -1;
+      
+      let rollCount = 0;
+      const maxRolls = 30;
+      const speed = 80;
+
+      const interval = setInterval(() => {
+        winnerIndex = Math.floor(Math.random() * frozenFaces.length);
+        rollCount++;
+        if (rollCount >= maxRolls) {
+          clearInterval(interval);
+          finishLottery();
+        }
+      }, speed);
+    });
+
+    function finishLottery() {
+      isRolling = false;
+      winnerDisplay.innerText = "🚀 神箭發射中...";
+      prepareArrow(); 
+    }
+
+    resetBtn.addEventListener('click', () => {
+      isFrozen = false;
+      isRolling = false;
+      isShooting = false;
+      winnerIndex = -1;
+      frozenFaces = [];
+      // manualFaces = []; // 如果你想重置時保留手動框，就把這行註解掉；如果想全清空，就留著。
+      // 建議：全清空比較符合邏輯
+      manualFaces = []; 
+      
+      snapshotImage = null;
+      winnerDisplay.innerText = "";
+      
+      drawBtn.style.display = 'inline-block';
+      drawBtn.disabled = false; 
+      switchBtn.style.display = 'inline-block';
+      undoBtn.style.display = 'none'; 
+      if (zoomCap) zoomArea.style.display = 'flex';
+      resetBtn.style.display = 'none';
+      closeModal();
+      statusText.innerText = "已重置 | 偵測中...";
+    });
+
+    function showWinnerDetail(index) {
+      if (index < 0 || index >= frozenFaces.length) return;
+      
+      winnerDisplay.innerText = "✨✨ 天選之人誕生！ ✨✨";
+      
+      const detection = frozenFaces[index];
+      const box = detection.boundingBox;
+      
+      const padding = 0.6; 
+      let w = box.width * canvasElement.width;
+      let h = box.height * canvasElement.height;
+      let x = box.xCenter * canvasElement.width - (w / 2);
+      let y = box.yCenter * canvasElement.height - (h / 2);
+
+      const extW = w * (1 + padding);
+      const extH = h * (1 + padding);
+      const extX = x - (w * padding) / 2;
+      const extY = y - (h * padding) / 2;
+
+      const targetW = 300;
+      const targetH = targetW * (h / w);
+      winnerCanvas.width = targetW;
+      winnerCanvas.height = targetH;
+      
+      winnerCtx.drawImage(snapshotImage, extX, extY, extW, extH, 0, 0, targetW, targetH);
+      winnerModal.style.display = 'flex';
+    }
+
+    function closeModal() {
+      winnerModal.style.display = 'none';
+    }
+
+    startBtn.addEventListener('click', startCamera);
+    
+    switchBtn.addEventListener('click', () => {
+      useFrontCamera = !useFrontCamera;
+      startCamera();
+    });
+  </script>
+</body>
+</html>
