@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>班級抽獎系統 (遠距增強版)</title>
+  <title>班級抽獎系統 (定格特寫版)</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
 
@@ -25,7 +25,6 @@
       position: relative;
       width: 100%;
       max-width: 960px;
-      /* 保持 16:9 */
       aspect-ratio: 16/9;
       background-color: #000;
       border: 2px solid #333;
@@ -69,33 +68,60 @@
     }
 
     button:active { transform: translateY(2px); }
-    
-    button:disabled { 
-      background: #555; 
-      color: #888;
-      cursor: not-allowed; 
-      box-shadow: none;
-    }
+    button:disabled { background: #555; color: #888; cursor: not-allowed; box-shadow: none; }
 
     #start-btn { background: linear-gradient(135deg, #28a745, #218838); }
-    #switch-cam-btn { background: linear-gradient(135deg, #6c757d, #5a6268); }
+    #reset-btn { background: linear-gradient(135deg, #dc3545, #c82333); display: none; } /* 預設隱藏 */
 
     #status { margin-top: 10px; color: #aaa; font-size: 0.9rem; text-align: center; }
     
     #winner-display {
-      margin-top: 15px;
+      margin-top: 10px;
       font-size: 1.5rem;
       font-weight: bold;
       color: #ffd700;
-      min-height: 40px;
+      min-height: 30px;
       text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
       text-align: center;
     }
+
+    /* --- 特寫彈窗樣式 --- */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.85);
+      display: none; /* 預設隱藏 */
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .modal-content {
+      background: #2b2b2b;
+      padding: 20px;
+      border-radius: 15px;
+      text-align: center;
+      border: 2px solid #ffd700;
+      box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
+      max-width: 90%;
+    }
+
+    .modal-content h2 { color: #ffd700; margin: 0 0 15px 0; }
+
+    #winner-canvas {
+      border-radius: 10px;
+      border: 3px solid white;
+      margin-bottom: 15px;
+      background: #000;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   </style>
 </head>
 <body>
 
-  <h1>🏆 班級抽獎系統 (遠距增強版)</h1>
+  <h1>🏆 班級抽獎系統 (定格特寫版)</h1>
   
   <div class="container">
     <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
@@ -107,57 +133,70 @@
 
   <div class="controls">
     <button id="start-btn">📸 啟動高畫質攝影機</button>
-    <button id="switch-cam-btn" style="display:none;">🔄 切換鏡頭</button>
-    <button id="draw-btn" disabled>🎲 開始抽獎</button>
+    <button id="draw-btn" disabled>🎲 定格並抽獎</button>
+    <button id="reset-btn">🔄 清空並重置</button>
+  </div>
+
+  <div class="modal-overlay" id="winner-modal">
+    <div class="modal-content">
+      <h2>✨ 恭喜中獎！ ✨</h2>
+      <canvas id="winner-canvas"></canvas>
+      <br>
+      <button onclick="closeModal()">關閉視窗</button>
+    </div>
   </div>
 
   <script>
+    // --- DOM 元素 ---
     const videoElement = document.getElementById('input_video');
     const canvasElement = document.getElementById('output_canvas');
-    const canvasCtx = canvasElement.getContext('2d');
+    const canvasCtx = canvasElement.getContext('2d', { willReadFrequently: true });
     
     const startBtn = document.getElementById('start-btn');
-    const switchBtn = document.getElementById('switch-cam-btn');
     const drawBtn = document.getElementById('draw-btn');
+    const resetBtn = document.getElementById('reset-btn');
     const statusText = document.getElementById('status');
     const winnerDisplay = document.getElementById('winner-display');
+    const winnerModal = document.getElementById('winner-modal');
+    const winnerCanvas = document.getElementById('winner-canvas');
+    const winnerCtx = winnerCanvas.getContext('2d');
 
-    let detectedFaces = []; 
-    let isRolling = false;  
-    let winnerIndex = -1;   
-    
+    // --- 狀態變數 ---
+    let detectedFaces = [];      // 即時偵測到的人臉
+    let frozenFaces = [];        // 定格當下的人臉數據
+    let isRolling = false;       // 是否正在跑抽獎動畫
+    let isFrozen = false;        // 是否處於定格狀態
+    let winnerIndex = -1;        
     let currentStream = null;
-    let useFrontCamera = false; 
     let isCameraRunning = false;
+    let snapshotImage = null;    // 存儲定格時的畫面
 
-    // --- 設定開始 ---
+    // --- 1. MediaPipe 設定 (敏感度調整區) ---
     const faceDetection = new FaceDetection({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
     });
 
     faceDetection.setOptions({
-      model: 'full', 
-      minDetectionConfidence: 0.3, // [關鍵修改] 降低門檻，越低越容易抓到遠處模糊的臉 (0.2~0.3 是極限)
+      model: 'full', // 遠距離模式
+      // [教學] 這裡就是敏感度！
+      // 如果覺得容易誤判(把時鐘當人臉)，請把 0.3 改成 0.5 或 0.6
+      // 如果覺得太遠抓不到人，請維持 0.3 或改 0.2
+      minDetectionConfidence: 0.5, 
       selfieMode: false 
     });
-    // --- 設定結束 ---
 
     faceDetection.onResults(onResults);
 
+    // --- 2. 啟動攝影機 ---
     async function startCamera() {
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
-      }
+      if (currentStream) return;
 
       statusText.innerText = "正在請求高畫質訊號...";
-
       const constraints = {
         audio: false,
         video: {
-          facingMode: useFrontCamera ? "user" : "environment",
-          // [關鍵修改] 強制請求 1080p 以上解析度
-          // 手機如果支援就會給高畫質，遠處的人臉才會有足夠的像素
-          width: { ideal: 1920 }, 
+          facingMode: "environment", // 預設後鏡頭
+          width: { ideal: 1920 },
           height: { ideal: 1080 }
         }
       };
@@ -170,107 +209,238 @@
         videoElement.onloadedmetadata = () => {
           videoElement.play();
           isCameraRunning = true;
-          // 顯示目前的解析度，確認是否有成功開啟高畫質
-          statusText.innerText = `系統運作中 | 解析度: ${videoElement.videoWidth}x${videoElement.videoHeight}`;
+          statusText.innerText = `系統就緒 | 解析度: ${videoElement.videoWidth}x${videoElement.videoHeight}`;
           startBtn.style.display = 'none';
-          switchBtn.style.display = 'inline-block';
-          
-          if (useFrontCamera) {
-            canvasElement.style.transform = "scaleX(-1)";
-          } else {
-            canvasElement.style.transform = "scaleX(1)";
-          }
           detectLoop();
         };
       } catch (err) {
-        console.error("攝影機啟動失敗:", err);
-        alert("無法啟動攝影機，請確認權限。\n(部分舊手機可能不支援高畫質，請重新整理試試)");
+        console.error(err);
+        alert("無法啟動攝影機");
       }
     }
 
+    // --- 3. 偵測與繪圖迴圈 ---
     async function detectLoop() {
-      if (!isCameraRunning) return;
-      
-      if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
-        canvasElement.width = videoElement.videoWidth;
-        canvasElement.height = videoElement.videoHeight;
-        await faceDetection.send({image: videoElement});
+      // 只有在「非定格」狀態下，才持續送出畫面給 AI 偵測
+      // 這樣可以省效能，並確保定格後數據不變
+      if (isCameraRunning && !isFrozen) {
+        if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+          canvasElement.width = videoElement.videoWidth;
+          canvasElement.height = videoElement.videoHeight;
+          await faceDetection.send({image: videoElement});
+        }
       }
+      
+      // 如果是定格狀態，我們需要手動呼叫繪圖，因為 AI 不會再觸發 onResults
+      if (isFrozen) {
+        drawFrozenFrame();
+      }
+
       requestAnimationFrame(detectLoop);
     }
 
+    // --- 4. 即時偵測回調 (Live Mode) ---
     function onResults(results) {
-      // 顯示即時人數
-      const count = results.detections.length;
-      if(isCameraRunning) {
-         statusText.innerText = `解析度: ${videoElement.videoWidth}x${videoElement.videoHeight} | 偵測人數: ${count}`;
-      }
+      if (isFrozen) return; // 如果已經定格，忽略新的 AI 結果
+
+      // 更新全域變數
+      detectedFaces = results.detections;
       
-      if (!isRolling && count > 0) {
+      // 更新按鈕狀態
+      if (detectedFaces.length > 0) {
         drawBtn.disabled = false;
+        statusText.innerText = `即時畫面 | 偵測人數: ${detectedFaces.length}`;
       } else {
         drawBtn.disabled = true;
+        statusText.innerText = `搜尋人臉中...`;
       }
 
+      // 繪製畫面
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-
-      detectedFaces = results.detections;
-
-      if (detectedFaces.length > 0) {
-        detectedFaces.forEach((detection, index) => {
-          const box = detection.boundingBox;
-          const w = box.width * canvasElement.width;
-          const h = box.height * canvasElement.height;
-          const x = box.xCenter * canvasElement.width - (w / 2);
-          const y = box.yCenter * canvasElement.height - (h / 2);
-
-          let color = 'rgba(255, 255, 255, 0.4)'; 
-          // [優化] 根據框的大小自動調整線條粗細，避免遠處的框太粗
-          let baseLineWidth = Math.max(1, w / 60); 
-
-          if (index === winnerIndex) {
-            if (isRolling) {
-              color = '#00CCFF';
-              baseLineWidth *= 2;
-            } else {
-              color = '#FF0033';
-              baseLineWidth *= 3;
-            }
-          }
-
-          canvasCtx.save();
-          canvasCtx.beginPath();
-          canvasCtx.rect(x, y, w, h);
-          canvasCtx.lineWidth = baseLineWidth;
-          canvasCtx.strokeStyle = color;
-          
-          if (index === winnerIndex && !isRolling) {
-            canvasCtx.shadowColor = "red";
-            canvasCtx.shadowBlur = 20;
-          }
-          canvasCtx.stroke();
-          canvasCtx.restore();
-
-          if (index === winnerIndex && !isRolling) {
-            drawGoldenExclamation(x, y, w, h);
-          }
-        });
-      }
+      drawBoxes(detectedFaces);
     }
 
-    function drawGoldenExclamation(x, y, w, h) {
-      // [優化] 讓驚嘆號大小能適應遠距離的小人臉
-      const scale = w / 150; 
-      const actualScale = Math.max(0.4, scale); // 設定最小縮放比，避免太小看不見
+    // --- 5. 定格繪圖 (Frozen Mode) ---
+    function drawFrozenFrame() {
+      // 1. 畫出定格的那張照片
+      if (snapshotImage) {
+        canvasCtx.drawImage(snapshotImage, 0, 0);
+      }
+      // 2. 畫出定格時的人臉框 (使用 frozenFaces)
+      drawBoxes(frozenFaces);
+    }
 
+    // --- 6. 畫框框的共用函式 ---
+    function drawBoxes(faces) {
+      if (!faces || faces.length === 0) return;
+
+      faces.forEach((detection, index) => {
+        const box = detection.boundingBox;
+        const w = box.width * canvasElement.width;
+        const h = box.height * canvasElement.height;
+        const x = box.xCenter * canvasElement.width - (w / 2);
+        const y = box.yCenter * canvasElement.height - (h / 2);
+
+        let color = 'rgba(255, 255, 255, 0.4)';
+        let lineWidth = Math.max(2, w / 60);
+
+        // 抽獎選中效果
+        if (index === winnerIndex) {
+          if (isRolling) {
+            color = '#00CCFF'; // 跑馬燈顏色
+            lineWidth *= 2;
+          } else {
+            color = '#FF0033'; // 中獎顏色
+            lineWidth *= 3;
+          }
+        }
+
+        canvasCtx.save();
+        canvasCtx.beginPath();
+        canvasCtx.rect(x, y, w, h);
+        canvasCtx.lineWidth = lineWidth;
+        canvasCtx.strokeStyle = color;
+
+        if (index === winnerIndex && !isRolling && isFrozen) {
+          canvasCtx.shadowColor = "red";
+          canvasCtx.shadowBlur = 20;
+        }
+        canvasCtx.stroke();
+        canvasCtx.restore();
+
+        // 畫驚嘆號 (只在中獎後顯示)
+        if (index === winnerIndex && !isRolling && isFrozen) {
+          drawGoldenExclamation(x, y, w, h);
+        }
+      });
+    }
+
+    // --- 7. 按鈕邏輯 ---
+
+    // [抽獎]
+    drawBtn.addEventListener('click', () => {
+      if (detectedFaces.length === 0) return;
+
+      // === 步驟 A: 定格 ===
+      isFrozen = true;
+      // 備份當下的人臉數據，之後動畫都只用這組數據
+      frozenFaces = [...detectedFaces]; 
+      
+      // 建立截圖 (Snapshot)
+      snapshotImage = new Image();
+      snapshotImage.src = canvasElement.toDataURL(); // 把當下 Canvas 存成圖片
+
+      // === 步驟 B: UI 變更 ===
+      drawBtn.style.display = 'none';   // 隱藏抽獎鈕
+      resetBtn.style.display = 'inline-block'; // 顯示重置鈕
+      statusText.innerText = "🔒 畫面已鎖定 | 抽獎進行中...";
+
+      // === 步驟 C: 執行抽獎動畫 ===
+      isRolling = true;
+      winnerDisplay.innerText = "🎲 命運輪轉中...";
+      winnerIndex = -1;
+      
+      let rollCount = 0;
+      const maxRolls = 30;
+      const speed = 80;
+
+      const interval = setInterval(() => {
+        // 在 frozenFaces 裡隨機跳
+        winnerIndex = Math.floor(Math.random() * frozenFaces.length);
+        rollCount++;
+
+        if (rollCount >= maxRolls) {
+          clearInterval(interval);
+          finishLottery(); // 結束抽獎
+        }
+      }, speed);
+    });
+
+    // [重置]
+    resetBtn.addEventListener('click', () => {
+      resetSystem();
+    });
+
+    function finishLottery() {
+      isRolling = false;
+      winnerDisplay.innerText = "✨✨ 天選之人誕生！ ✨✨";
+      
+      // 延遲一點點再顯示特寫，讓大家先看到框框變紅
+      setTimeout(() => {
+        showWinnerDetail(winnerIndex);
+      }, 600);
+    }
+
+    function resetSystem() {
+      isFrozen = false;
+      isRolling = false;
+      winnerIndex = -1;
+      frozenFaces = [];
+      snapshotImage = null;
+      winnerDisplay.innerText = "";
+      
+      drawBtn.style.display = 'inline-block';
+      drawBtn.disabled = false;
+      resetBtn.style.display = 'none';
+      closeModal();
+      
+      statusText.innerText = "已重置 | 繼續偵測中...";
+    }
+
+    // --- 8. 特寫視窗邏輯 ---
+    function showWinnerDetail(index) {
+      if (index < 0 || index >= frozenFaces.length) return;
+
+      const detection = frozenFaces[index];
+      const box = detection.boundingBox;
+      
+      // 計算截圖區域 (稍微比人臉框大一點，才不會只有臉沒有頭髮)
+      const padding = 0.5; // 擴大 50%
+      let w = box.width * canvasElement.width;
+      let h = box.height * canvasElement.height;
+      let x = box.xCenter * canvasElement.width - (w / 2);
+      let y = box.yCenter * canvasElement.height - (h / 2);
+
+      // 擴大範圍
+      const extW = w * (1 + padding);
+      const extH = h * (1 + padding);
+      const extX = x - (w * padding) / 2;
+      const extY = y - (h * padding) / 2;
+
+      // 設定特寫 Canvas 大小 (例如固定寬 300px，高等比例)
+      const targetW = 300;
+      const targetH = targetW * (h / w);
+      winnerCanvas.width = targetW;
+      winnerCanvas.height = targetH;
+
+      // 從原本的 snapshot 剪裁出那個人的臉
+      winnerCtx.drawImage(
+        snapshotImage, 
+        extX, extY, extW, extH, // 來源範圍
+        0, 0, targetW, targetH  // 目標範圍
+      );
+
+      // 顯示視窗
+      winnerModal.style.display = 'flex';
+    }
+
+    function closeModal() {
+      winnerModal.style.display = 'none';
+    }
+
+    // 啟動鈕監聽
+    startBtn.addEventListener('click', startCamera);
+
+    // --- 輔助繪圖 (驚嘆號與圓角) ---
+    function drawGoldenExclamation(x, y, w, h) {
+      const scale = w / 150; 
+      const actualScale = Math.max(0.4, scale); 
       const centerX = x + w / 2;
       const bottomY = y - (20 * actualScale); 
-      
       const dotSize = 15 * actualScale;     
       const barWidth = 24 * actualScale;    
       const barHeight = 80 * actualScale;   
-
       const time = Date.now() / 200; 
       const glowIntensity = Math.abs(Math.sin(time)) * 20 + 10; 
 
@@ -284,7 +454,6 @@
       const barX = centerX - barWidth / 2;
       const barY = bottomY - dotSize * 2 - (15 * actualScale) - barHeight; 
       roundRect(canvasCtx, barX, barY, barWidth, barHeight, 10 * actualScale, true, true);
-
       const dotY = bottomY - dotSize;
       canvasCtx.beginPath();
       canvasCtx.arc(centerX, dotY, dotSize, 0, Math.PI * 2);
@@ -310,34 +479,6 @@
       if (fill) { ctx.fill(); }
       if (stroke) { ctx.stroke(); }
     }
-
-    startBtn.addEventListener('click', () => startCamera());
-    switchBtn.addEventListener('click', () => {
-      useFrontCamera = !useFrontCamera;
-      startCamera();
-    });
-
-    drawBtn.addEventListener('click', () => {
-      if (detectedFaces.length === 0) return;
-      isRolling = true;
-      drawBtn.disabled = true;
-      winnerDisplay.innerText = "🎲 命運輪轉中...";
-      winnerIndex = -1;
-      let rollCount = 0;
-      const maxRolls = 30; 
-      const speed = 80;    
-      const interval = setInterval(() => {
-        winnerIndex = Math.floor(Math.random() * detectedFaces.length);
-        rollCount++;
-        if (rollCount >= maxRolls) {
-          clearInterval(interval);
-          isRolling = false; 
-          drawBtn.disabled = false;
-          winnerDisplay.innerText = "✨✨ 天選之人誕生！ ✨✨";
-        }
-      }, speed); 
-    });
-
   </script>
 </body>
 </html>
