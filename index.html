@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>班級抽獎系統 (定格特寫最終版)</title>
+  <title>班級抽獎系統 (變焦戰鬥版)</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
 
@@ -16,10 +16,10 @@
       align-items: center;
       margin: 0;
       padding: 10px;
-      overscroll-behavior: none; /* 防止手機下拉重整 */
+      overscroll-behavior: none;
     }
 
-    h1 { margin-bottom: 10px; font-size: 1.5rem; text-align: center;}
+    h1 { margin-bottom: 5px; font-size: 1.4rem; text-align: center;}
 
     .container {
       position: relative;
@@ -33,7 +33,6 @@
       box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
     }
 
-    /* 確保影片元件存在但不可見，避免 iOS 強制全螢幕 */
     video { 
       position: absolute; 
       top: 0; left: 0;
@@ -50,11 +49,34 @@
     }
 
     .controls {
-      margin-top: 20px;
+      margin-top: 15px;
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
       gap: 10px;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    /* 變焦控制區 */
+    .zoom-control {
+      width: 100%;
+      display: none; /* 預設隱藏，有支援才顯示 */
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      background: #333;
+      padding: 10px;
+      border-radius: 50px;
+    }
+    
+    .zoom-control label { font-size: 0.9rem; color: #ffd700; }
+    
+    input[type=range] {
+      width: 70%;
+      accent-color: #ffd700;
+      cursor: pointer;
     }
 
     button {
@@ -68,7 +90,6 @@
       box-shadow: 0 4px 6px rgba(0,0,0,0.3);
       user-select: none; 
       -webkit-user-select: none;
-      touch-action: manipulation;
     }
 
     button:active { transform: translateY(2px); }
@@ -81,7 +102,7 @@
     #status { margin-top: 10px; color: #aaa; font-size: 0.9rem; text-align: center; }
     
     #winner-display {
-      margin-top: 10px;
+      margin-top: 5px;
       font-size: 1.5rem;
       font-weight: bold;
       color: #ffd700;
@@ -90,7 +111,6 @@
       text-align: center;
     }
 
-    /* 特寫彈窗 */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; width: 100%; height: 100%;
@@ -128,7 +148,7 @@
 </head>
 <body>
 
-  <h1>🏆 班級抽獎系統 (定格特寫版)</h1>
+  <h1>🏆 班級抽獎系統 (變焦戰鬥版)</h1>
   
   <div class="container">
     <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
@@ -139,6 +159,11 @@
   <div id="winner-display"></div>
 
   <div class="controls">
+    <div class="zoom-control" id="zoom-area">
+      <label>🔍 遠距放大:</label>
+      <input type="range" id="zoom-slider" min="1" max="5" step="0.1" value="1">
+    </div>
+
     <button id="start-btn">📸 啟動相機</button>
     <button id="switch-cam-btn" style="display:none;">🔄 切換鏡頭</button>
     <button id="draw-btn" disabled>🎲 定格並抽獎</button>
@@ -168,6 +193,10 @@
     const winnerModal = document.getElementById('winner-modal');
     const winnerCanvas = document.getElementById('winner-canvas');
     const winnerCtx = winnerCanvas.getContext('2d');
+    
+    // 變焦元件
+    const zoomArea = document.getElementById('zoom-area');
+    const zoomSlider = document.getElementById('zoom-slider');
 
     // 變數
     let detectedFaces = [];      
@@ -178,8 +207,12 @@
     let currentStream = null;
     let isCameraRunning = false;
     let snapshotImage = null;
-    let useFrontCamera = false; // 預設使用後鏡頭
+    let useFrontCamera = false; 
     let isModelLoaded = false;  
+    
+    // 鏡頭能力變數
+    let videoTrack = null;
+    let zoomCap = null;
 
     // --- MediaPipe 設定 ---
     const faceDetection = new FaceDetection({
@@ -188,8 +221,8 @@
 
     faceDetection.setOptions({
       model: 'full', 
-      // [關鍵修改 1] 將敏感度從 0.5 降為 0.4，更容易抓到人臉，但仍保持一定過濾能力
-      minDetectionConfidence: 0.4, 
+      // [關鍵] 降到 0.3，極限提升遠距辨識率
+      minDetectionConfidence: 0.3, 
       selfieMode: false 
     });
 
@@ -200,14 +233,16 @@
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
+      
+      // 重置變焦 UI
+      zoomArea.style.display = 'none';
 
-      statusText.innerText = "正在啟動相機 (請允許權限)...";
+      statusText.innerText = "正在啟動相機 (請求高畫質)...";
 
       const constraints = {
         audio: false,
         video: {
           facingMode: useFrontCamera ? "user" : "environment",
-          // 請求高畫質
           width: { ideal: 1920 },
           height: { ideal: 1080 }
         }
@@ -216,12 +251,25 @@
       try {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         currentStream = stream;
+        videoTrack = stream.getVideoTracks()[0];
+        
+        // --- [新增] 檢查並啟用變焦功能 ---
+        const capabilities = videoTrack.getCapabilities();
+        if (capabilities.zoom) {
+          zoomCap = capabilities.zoom;
+          zoomSlider.min = zoomCap.min;
+          zoomSlider.max = zoomCap.max;
+          zoomSlider.step = zoomCap.step;
+          zoomSlider.value = zoomCap.min;
+          zoomArea.style.display = 'flex'; // 顯示拉桿
+          statusText.innerText = "支援硬體變焦！";
+        } else {
+          console.log("此設備不支援變焦 API");
+        }
         
         videoElement.onloadedmetadata = () => {
           videoElement.play();
           isCameraRunning = true;
-          
-          statusText.innerText = "相機已啟動 | 等待 AI 模型載入...";
           startBtn.style.display = 'none';
           switchBtn.style.display = 'inline-block';
           drawBtn.style.display = 'inline-block'; 
@@ -231,7 +279,6 @@
           } else {
             canvasElement.style.transform = "scaleX(1)";
           }
-          
           detectLoop();
         };
 
@@ -239,10 +286,19 @@
 
       } catch (err) {
         console.error("相機錯誤:", err);
-        alert("無法啟動相機！請確認：\n1. 網址是 HTTPS\n2. 已允許瀏覽器使用相機");
-        statusText.innerText = "啟動失敗，請重新整理網頁。";
+        alert("無法啟動相機！請重新整理試試。");
       }
     }
+
+    // --- [新增] 監聽變焦拉桿 ---
+    zoomSlider.addEventListener('input', () => {
+      if (videoTrack && zoomCap) {
+        const zoomValue = parseFloat(zoomSlider.value);
+        videoTrack.applyConstraints({
+          advanced: [{ zoom: zoomValue }]
+        }).catch(e => console.log("變焦失敗:", e));
+      }
+    });
 
     // --- 偵測迴圈 ---
     async function detectLoop() {
@@ -252,7 +308,6 @@
         canvasElement.width = videoElement.videoWidth;
         canvasElement.height = videoElement.videoHeight;
 
-        // 防止 AI 載入前的黑畫面
         if (!isFrozen && !isModelLoaded) {
              canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
         }
@@ -269,25 +324,22 @@
       requestAnimationFrame(detectLoop);
     }
 
-    // --- [關鍵修改 2] 顯示真實畫質的結果處理 ---
     function onResults(results) {
       isModelLoaded = true; 
-
       if (isFrozen) return; 
 
       detectedFaces = results.detections;
       
-      // 取得真實解析度
       const realW = videoElement.videoWidth;
       const realH = videoElement.videoHeight;
-      const resText = `${realW}x${realH}`; // 例如 1920x1080
+      const resText = `${realW}x${realH}`;
 
       if (detectedFaces.length > 0) {
         drawBtn.disabled = false;
         statusText.innerText = `準備就緒 | 畫質: ${resText} | 偵測人數: ${detectedFaces.length}`;
       } else {
         drawBtn.disabled = true;
-        statusText.innerText = `搜尋人臉中... (AI 運作中 | 目前畫質: ${resText})`;
+        statusText.innerText = `搜尋人臉中... (可嘗試拉動變焦桿)`;
       }
 
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
@@ -295,7 +347,6 @@
       drawBoxes(detectedFaces);
     }
 
-    // --- 定格繪圖 ---
     function drawFrozenFrame() {
       if (snapshotImage) {
         canvasCtx.drawImage(snapshotImage, 0, 0);
@@ -303,7 +354,6 @@
       drawBoxes(frozenFaces);
     }
 
-    // --- 畫框共用函式 ---
     function drawBoxes(faces) {
       if (!faces) return;
       faces.forEach((detection, index) => {
@@ -345,25 +395,21 @@
       });
     }
 
-    // --- 抽獎邏輯 ---
     drawBtn.addEventListener('click', () => {
       if (detectedFaces.length === 0) return;
 
-      // 1. 定格
       isFrozen = true;
       frozenFaces = [...detectedFaces];
       
-      // 截圖保存
       snapshotImage = new Image();
       snapshotImage.src = canvasElement.toDataURL();
 
-      // 2. 切換 UI
       drawBtn.style.display = 'none';
       switchBtn.style.display = 'none'; 
+      zoomArea.style.display = 'none'; // 定格時隱藏變焦桿
       resetBtn.style.display = 'inline-block';
       statusText.innerText = "🔒 畫面已鎖定 | 抽獎中...";
 
-      // 3. 動畫
       isRolling = true;
       winnerDisplay.innerText = "🎲 命運輪轉中...";
       winnerIndex = -1;
@@ -390,7 +436,6 @@
       }, 500);
     }
 
-    // --- 重置邏輯 ---
     resetBtn.addEventListener('click', () => {
       isFrozen = false;
       isRolling = false;
@@ -402,19 +447,18 @@
       drawBtn.style.display = 'inline-block';
       drawBtn.disabled = false; 
       switchBtn.style.display = 'inline-block';
+      if (zoomCap) zoomArea.style.display = 'flex'; // 恢復變焦桿
       resetBtn.style.display = 'none';
       closeModal();
       
       statusText.innerText = "已重置 | 偵測中...";
     });
 
-    // --- 特寫視窗 ---
     function showWinnerDetail(index) {
       if (index < 0 || index >= frozenFaces.length) return;
       const detection = frozenFaces[index];
       const box = detection.boundingBox;
       
-      // 擴大裁切範圍
       const padding = 0.6; 
       let w = box.width * canvasElement.width;
       let h = box.height * canvasElement.height;
@@ -426,7 +470,6 @@
       const extX = x - (w * padding) / 2;
       const extY = y - (h * padding) / 2;
 
-      // 繪製到特寫 Canvas
       const targetW = 300;
       const targetH = targetW * (h / w);
       winnerCanvas.width = targetW;
@@ -440,7 +483,6 @@
       winnerModal.style.display = 'none';
     }
 
-    // --- 按鈕監聽 ---
     startBtn.addEventListener('click', startCamera);
     
     switchBtn.addEventListener('click', () => {
@@ -448,7 +490,6 @@
       startCamera();
     });
 
-    // --- 輔助繪圖 ---
     function drawGoldenExclamation(x, y, w, h) {
       const scale = w / 150; 
       const actualScale = Math.max(0.4, scale); 
