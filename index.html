@@ -33,7 +33,7 @@
       box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
     }
 
-    /* 確保影片元件存在但不可見，避免 iOS 全螢幕播放干擾 */
+    /* 確保影片元件存在但不可見，避免 iOS 強制全螢幕 */
     video { 
       position: absolute; 
       top: 0; left: 0;
@@ -128,14 +128,14 @@
 </head>
 <body>
 
-  <h1>🏆 班級抽獎系統 (特寫與定格)</h1>
+  <h1>🏆 班級抽獎系統 (定格特寫版)</h1>
   
   <div class="container">
     <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
     <canvas id="output_canvas"></canvas>
   </div>
 
-  <div id="status">請按下「啟動攝影機」</div>
+  <div id="status">請按下「啟動相機」</div>
   <div id="winner-display"></div>
 
   <div class="controls">
@@ -179,7 +179,7 @@
     let isCameraRunning = false;
     let snapshotImage = null;
     let useFrontCamera = false; // 預設使用後鏡頭
-    let isModelLoaded = false;  // 標記 AI 模型是否載入完成
+    let isModelLoaded = false;  
 
     // --- MediaPipe 設定 ---
     const faceDetection = new FaceDetection({
@@ -188,7 +188,8 @@
 
     faceDetection.setOptions({
       model: 'full', 
-      minDetectionConfidence: 0.5, // 敏感度設定 (0.5=適中, 0.3=寬鬆)
+      // [關鍵修改 1] 將敏感度從 0.5 降為 0.4，更容易抓到人臉，但仍保持一定過濾能力
+      minDetectionConfidence: 0.4, 
       selfieMode: false 
     });
 
@@ -196,7 +197,6 @@
 
     // --- 啟動攝影機 ---
     async function startCamera() {
-      // 停止舊的串流
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
@@ -207,6 +207,7 @@
         audio: false,
         video: {
           facingMode: useFrontCamera ? "user" : "environment",
+          // 請求高畫質
           width: { ideal: 1920 },
           height: { ideal: 1080 }
         }
@@ -216,25 +217,21 @@
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         currentStream = stream;
         
-        // 關鍵修正：先綁定事件，再設定 srcObject，避免 Race Condition
         videoElement.onloadedmetadata = () => {
           videoElement.play();
           isCameraRunning = true;
           
-          // 更新 UI 狀態
           statusText.innerText = "相機已啟動 | 等待 AI 模型載入...";
           startBtn.style.display = 'none';
           switchBtn.style.display = 'inline-block';
-          drawBtn.style.display = 'inline-block'; // 確保抽獎按鈕可見(但 disabled)
+          drawBtn.style.display = 'inline-block'; 
 
-          // 處理鏡像翻轉
           if (useFrontCamera) {
             canvasElement.style.transform = "scaleX(-1)";
           } else {
             canvasElement.style.transform = "scaleX(1)";
           }
           
-          // 開始繪圖迴圈
           detectLoop();
         };
 
@@ -251,25 +248,20 @@
     async function detectLoop() {
       if (!isCameraRunning) return;
       
-      // 確保影片有尺寸
       if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
-        // 設定畫布大小
         canvasElement.width = videoElement.videoWidth;
         canvasElement.height = videoElement.videoHeight;
 
-        // 【關鍵修復】: 如果 AI 還沒載入好，或是沒有偵測到人，
-        // 我們也要強制把「原始攝影機畫面」畫上去，避免黑畫面！
+        // 防止 AI 載入前的黑畫面
         if (!isFrozen && !isModelLoaded) {
              canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
         }
 
-        // 如果不是定格狀態，才送給 AI 辨識
         if (!isFrozen) {
            await faceDetection.send({image: videoElement});
         }
       }
       
-      // 如果是定格狀態，手動繪製截圖與框框
       if (isFrozen) {
         drawFrozenFrame();
       }
@@ -277,22 +269,27 @@
       requestAnimationFrame(detectLoop);
     }
 
+    // --- [關鍵修改 2] 顯示真實畫質的結果處理 ---
     function onResults(results) {
-      isModelLoaded = true; // 只要 AI 回傳第一次結果，就代表載入完成了
+      isModelLoaded = true; 
 
-      if (isFrozen) return; // 定格時忽略 AI 更新
+      if (isFrozen) return; 
 
       detectedFaces = results.detections;
       
+      // 取得真實解析度
+      const realW = videoElement.videoWidth;
+      const realH = videoElement.videoHeight;
+      const resText = `${realW}x${realH}`; // 例如 1920x1080
+
       if (detectedFaces.length > 0) {
         drawBtn.disabled = false;
-        statusText.innerText = `準備就緒 | 畫面人數: ${detectedFaces.length}`;
+        statusText.innerText = `準備就緒 | 畫質: ${resText} | 偵測人數: ${detectedFaces.length}`;
       } else {
         drawBtn.disabled = true;
-        statusText.innerText = `搜尋人臉中... (AI 運作中)`;
+        statusText.innerText = `搜尋人臉中... (AI 運作中 | 目前畫質: ${resText})`;
       }
 
-      // 繪製 AI 處理後的畫面 (包含影像本身)
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
       drawBoxes(detectedFaces);
@@ -335,7 +332,6 @@
         canvasCtx.lineWidth = lineWidth;
         canvasCtx.strokeStyle = color;
 
-        // 中獎發光效果
         if (index === winnerIndex && !isRolling && isFrozen) {
           canvasCtx.shadowColor = "red";
           canvasCtx.shadowBlur = 20;
@@ -343,7 +339,6 @@
         canvasCtx.stroke();
         canvasCtx.restore();
 
-        // 畫驚嘆號
         if (index === winnerIndex && !isRolling && isFrozen) {
           drawGoldenExclamation(x, y, w, h);
         }
@@ -364,7 +359,7 @@
 
       // 2. 切換 UI
       drawBtn.style.display = 'none';
-      switchBtn.style.display = 'none'; // 抽獎中不給切換鏡頭
+      switchBtn.style.display = 'none'; 
       resetBtn.style.display = 'inline-block';
       statusText.innerText = "🔒 畫面已鎖定 | 抽獎中...";
 
@@ -419,7 +414,7 @@
       const detection = frozenFaces[index];
       const box = detection.boundingBox;
       
-      // 擴大裁切範圍 (padding)
+      // 擴大裁切範圍
       const padding = 0.6; 
       let w = box.width * canvasElement.width;
       let h = box.height * canvasElement.height;
