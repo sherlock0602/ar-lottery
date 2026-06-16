@@ -87,18 +87,19 @@
       pointer-events: none; 
     }
     
+    /* 抽獎過程中的提示字 (已縮小比例，避免佔用太大空間) */
     #winner-display {
       position: absolute;
-      top: 80px;
+      top: 60px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 10;
-      font-size: 2.5rem;
+      font-size: 1.5rem;
       font-weight: bold;
       color: #ffd700;
       text-shadow: 0 0 15px rgba(255, 215, 0, 0.8), 0 0 30px #ff00ea;
       background: rgba(0, 0, 0, 0.5);
-      padding: 15px 40px;
+      padding: 10px 25px;
       border-radius: 50px;
       backdrop-filter: blur(8px);
       border: 2px solid rgba(255, 215, 0, 0.5);
@@ -112,7 +113,7 @@
       bottom: 30px;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 20; /* 確保按鈕永遠在最上層 */
+      z-index: 20; 
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
@@ -214,7 +215,6 @@
       explosionFrame: 0,
       particles: [], 
       clickRipples: [],
-      // 用於平滑運鏡縮放的變數
       zoomProgress: 0,
       zoomSrc: {x:0, y:0, w:0, h:0},
       zoomDst: {x:0, y:0, w:0, h:0}
@@ -305,29 +305,23 @@
         }
 
       } else {
-        // [定格模式]
         if (state.snapshotImage) canvasCtx.drawImage(state.snapshotImage, 0, 0);
 
         if (state.showWinnerView) {
-            // --- 平滑縮放核心邏輯 ---
             if (fx.zoomProgress < 1) {
-                fx.zoomProgress += 0.035; // 縮放速度，數值越大越快
+                fx.zoomProgress += 0.035; 
                 if (fx.zoomProgress > 1) fx.zoomProgress = 1;
             }
-            // 使用 easeOutQuart 讓動畫有電影般的緩衝感
             const p = 1 - Math.pow(1 - fx.zoomProgress, 4); 
 
-            // 1. 畫上微微變暗的蒙版 (最高只到 40% 黑暗，保留背景透視)
             canvasCtx.fillStyle = `rgba(0, 0, 0, ${0.4 * p})`;
             canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
 
-            // 2. 差值計算當下的座標與大小
             const curX = fx.zoomSrc.x + (fx.zoomDst.x - fx.zoomSrc.x) * p;
             const curY = fx.zoomSrc.y + (fx.zoomDst.y - fx.zoomSrc.y) * p;
             const curW = fx.zoomSrc.w + (fx.zoomDst.w - fx.zoomSrc.w) * p;
             const curH = fx.zoomSrc.h + (fx.zoomDst.h - fx.zoomSrc.h) * p;
 
-            // 3. 繪製浮現的特寫與發光外框
             canvasCtx.save();
             canvasCtx.shadowColor = `rgba(255, 215, 0, ${p})`;
             canvasCtx.shadowBlur = 40 * p;
@@ -335,9 +329,22 @@
             canvasCtx.strokeStyle = `rgba(255, 215, 0, ${p})`;
 
             canvasCtx.drawImage(state.snapshotImage, fx.zoomSrc.x, fx.zoomSrc.y, fx.zoomSrc.w, fx.zoomSrc.h, curX, curY, curW, curH);
-            
-            // 當動畫進行一小段後再把框線畫出來，視覺更自然
             if (p > 0.1) canvasCtx.strokeRect(curX, curY, curW, curH);
+            
+            // [關鍵修改]：將天選之人的文字直接黏在頭像框的正上方，隨比例縮放，絕不遮擋人臉！
+            if (p > 0.3) {
+                canvasCtx.shadowBlur = 10 * p;
+                canvasCtx.fillStyle = `rgba(255, 215, 0, ${p})`;
+                
+                // 動態字體大小：縮放過程中字體微微變大，但不會變得像之前一樣巨大
+                const fontSize = 16 + (14 * p); 
+                canvasCtx.font = `bold ${fontSize}px sans-serif`;
+                canvasCtx.textAlign = "center";
+                canvasCtx.textBaseline = "bottom"; // 對齊底部，確保字從框框往上長
+                
+                // 畫在特寫框框的正上方 12px 處
+                canvasCtx.fillText("🎉 天選之人 🎉", curX + curW / 2, curY - 12);
+            }
             canvasCtx.restore();
 
             if (fx.particles.length > 0) updateAndDrawConfetti();
@@ -352,7 +359,6 @@
       requestAnimationFrame(detectLoop);
     }
 
-    // --- 混合式追蹤 ---
     function trackManualFacesHybrid() {
       if (!state.isCameraRunning || state.isFrozen || state.manualFaces.length === 0) return;
       const tSize = 30; const searchRadius = 60; 
@@ -403,7 +409,6 @@
       });
     }
 
-    // --- 點擊事件 ---
     canvasElement.addEventListener('click', (event) => {
       if (!state.isCameraRunning || state.isFrozen) return;
       const rect = canvasElement.getBoundingClientRect();
@@ -434,7 +439,6 @@
       updateStatus();
     });
 
-    // --- 畫面UI繪製 ---
     function drawBoxes(faces) {
       if (!faces) return;
       faces.forEach((face, index) => {
@@ -467,7 +471,6 @@
       });
     }
 
-    // --- 抽獎與特效邏輯 ---
     elements.drawBtn.addEventListener('click', () => {
       const validAiFaces = [];
       state.detectedFaces.forEach(aiFace => {
@@ -558,30 +561,27 @@
     }
 
     function showWinnerDetail() {
+      elements.winnerDisplay.style.display = 'none'; // 將原本巨大的 HTML 提示隱藏
       state.showWinnerView = true; 
-      fx.zoomProgress = 0; // 重置縮放動畫進度
+      fx.zoomProgress = 0; 
       
       const face = state.frozenFaces[state.winnerIndex];
       const padding = 0.5;
       
-      // 計算起始來源座標與大小
       let extW = face.w * (1 + padding);
       let extH = face.h * (1 + padding);
       let extX = face.x - (face.w * padding) / 2;
       let extY = face.y - (face.h * padding) / 2;
       fx.zoomSrc = { x: extX, y: extY, w: extW, h: extH };
 
-      // 計算目標放大座標與大小 (最高佔畫面的 45%)
-      const scale = Math.min((canvasElement.width * 0.4) / extW, (canvasElement.height * 0.45) / extH);
+      // [微調] 將最終放大的佔比縮小一點點，避免在小螢幕上太過壓迫 (0.4 改為 0.3)
+      const scale = Math.min((canvasElement.width * 0.3) / extW, (canvasElement.height * 0.35) / extH);
       let targetW = extW * scale;
       let targetH = extH * scale;
       let targetX = (canvasElement.width - targetW) / 2;
       let targetY = (canvasElement.height - targetH) / 2;
       fx.zoomDst = { x: targetX, y: targetY, w: targetW, h: targetH };
-
-      elements.winnerDisplay.innerText = "🎉 天選之人 🎉";
       
-      // 顯示專屬的「繼續抽獎」按鈕
       elements.resetBtn.style.display = 'inline-block';
     }
 
