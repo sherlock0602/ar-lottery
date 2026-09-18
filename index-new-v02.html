@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>班級抽獎系統 (ONNX AI 專業設定版)</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.min.js"></script>
+
+  <style>
+    :root {
+      --primary: #00e5ff;
+      --secondary: #ff00ea;
+      --success: #00ff66;
+    }
+
+    body {
+      background-color: #0a0a10; color: white;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex; flex-direction: column; align-items: center;
+      margin: 0; padding: 10px 20px; overscroll-behavior: none; user-select: none;
+    }
+
+    h1 { 
+      margin-bottom: 15px; font-size: 2rem; text-align: center;
+      text-transform: uppercase; letter-spacing: 2px;
+      text-shadow: 0 0 10px var(--primary), 0 0 20px var(--secondary);
+    }
+
+    .container {
+      position: relative; width: 100%; max-width: 1200px; aspect-ratio: 16/9;
+      background-color: #111; border: 2px solid #333; border-radius: 16px;
+      overflow: hidden; box-shadow: 0 0 30px rgba(0, 229, 255, 0.2);
+      cursor: crosshair; transition: box-shadow 0.3s ease;
+    }
+
+    .container.rolling {
+      box-shadow: 0 0 50px var(--secondary); animation: pulseBorder 0.5s infinite alternate;
+    }
+
+    video { display: none; }
+    canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
+
+    #status { 
+      position: absolute; top: 20px; left: 20px; z-index: 10;
+      color: #00e5ff; font-size: 1.1rem; font-weight: bold; 
+      letter-spacing: 1px; background: rgba(0, 0, 0, 0.4); 
+      padding: 10px 15px; border-radius: 8px; backdrop-filter: blur(6px); 
+      border: 1px solid rgba(0, 229, 255, 0.2); pointer-events: none; 
+    }
+    
+    #winner-display {
+      position: absolute; top: 60px; left: 50%; transform: translateX(-50%); z-index: 10;
+      font-size: 1.5rem; font-weight: bold; color: #ffd700;
+      text-shadow: 0 0 15px rgba(255, 215, 0, 0.8), 0 0 30px #ff00ea;
+      background: rgba(0, 0, 0, 0.5); padding: 10px 25px; border-radius: 50px;
+      backdrop-filter: blur(8px); border: 2px solid rgba(255, 215, 0, 0.5);
+      display: none; pointer-events: none; animation: fadeIn 0.4s ease-out;
+    }
+
+    .controls {
+      position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+      z-index: 20; display: flex; flex-wrap: wrap; justify-content: center; gap: 15px; width: 90%;
+    }
+
+    button {
+      padding: 12px 28px; font-size: 1.1rem; font-weight: bold; cursor: pointer; color: white;
+      border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 50px; backdrop-filter: blur(10px); 
+      transition: all 0.3s ease; text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    }
+
+    button:hover:not(:disabled) { transform: translateY(-3px); border-color: rgba(255,255,255,0.8); box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    button:disabled { background: rgba(34, 34, 34, 0.6); color: #888; border-color: transparent; cursor: not-allowed; }
+
+    #start-btn { background: rgba(0, 180, 219, 0.4); border-color: rgba(0, 229, 255, 0.4); box-shadow: 0 0 15px rgba(0, 229, 255, 0.2);}
+    #draw-btn { background: rgba(241, 39, 17, 0.4); border-color: rgba(255, 204, 0, 0.4); box-shadow: 0 0 15px rgba(245, 175, 25, 0.2);}
+    #reset-btn { background: linear-gradient(135deg, #00b4db, #0083b0); border-color: #00e5ff; display: none; padding: 15px 50px; font-size: 1.3rem; box-shadow: 0 0 20px rgba(0, 229, 255, 0.5);}
+    #switch-cam-btn, #undo-btn, #settings-btn { background: rgba(50, 50, 50, 0.5); }
+
+    /* --- 設定面板樣式 --- */
+    #settings-modal {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(5px);
+      z-index: 100; display: none; justify-content: center; align-items: center;
+    }
+    .modal-content {
+      background: rgba(20, 20, 25, 0.95); border: 1px solid var(--primary);
+      padding: 30px; border-radius: 16px; width: 350px;
+      box-shadow: 0 0 30px rgba(0, 229, 255, 0.3);
+    }
+    .modal-content h2 { margin-top: 0; text-align: center; color: var(--primary); margin-bottom: 25px; }
+    .setting-group { margin-bottom: 20px; }
+    .setting-group label { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 1rem; color: #ccc; }
+    .setting-group input[type="range"] { width: 100%; cursor: pointer; accent-color: var(--primary); }
+    .setting-note { font-size: 0.8rem; color: #888; margin-top: 5px; display: block; }
+    .close-modal-btn { width: 100%; background: var(--primary); color: #000; border: none; padding: 12px; margin-top: 10px; font-size: 1.1rem; }
+    .close-modal-btn:hover { background: #00c4cc; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+    @keyframes pulseBorder { from { box-shadow: 0 0 20px var(--primary); } to { box-shadow: 0 0 50px var(--secondary); } }
+  </style>
+</head>
+<body>
+
+  <h1>✨ 班級抽獎系統 PRO (ONNX 引擎) ✨</h1>
+  
+  <div class="container" id="canvas-container">
+    <video id="input_video" playsinline webkit-playsinline muted autoplay></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="status">⏳ 正在初始化 AI 引擎...</div>
+    <div id="winner-display"></div>
+
+    <div class="controls">
+      <button id="start-btn" disabled>📸 啟動相機</button>
+      <button id="switch-cam-btn" style="display:none;">🔄 切換</button>
+      <button id="settings-btn">⚙️ 設定</button>
+      <button id="undo-btn" style="display:none;">↩️ 撤銷</button>
+      <button id="draw-btn" disabled>🎲 開始抽獎</button>
+      <button id="reset-btn">🔄 繼續抽獎</button>
+    </div>
+  </div>
+
+  <!-- 設定面板 -->
+  <div id="settings-modal">
+    <div class="modal-content">
+      <h2>⚙️ 系統參數設定</h2>
+      
+      <div class="setting-group">
+        <label><span>🔍 AI 視力 (解析度)</span> <span id="val-res">640</span></label>
+        <input type="range" id="cfg-res" min="320" max="960" step="32" value="640">
+        <span class="setting-note">數值越高看得越遠，但較耗硬體效能 (需為32的倍數)</span>
+      </div>
+
+      <div class="setting-group">
+        <label><span>🛡️ 嚴格度 (信心門檻)</span> <span id="val-conf">0.45</span></label>
+        <input type="range" id="cfg-conf" min="0.1" max="0.9" step="0.05" value="0.45">
+        <span class="setting-note">數值越低越容易抓，但也容易誤判背景</span>
+      </div>
+
+      <div class="setting-group">
+        <label><span>🚀 射箭速度</span> <span id="val-speed">快速</span></label>
+        <input type="range" id="cfg-speed" min="0.02" max="0.15" step="0.01" value="0.08">
+        <span class="setting-note">調整動畫鎖定天選之人的飛行速度</span>
+      </div>
+
+      <button class="close-modal-btn" id="close-settings-btn">✔️ 完成設定</button>
+    </div>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d', { willReadFrequently: true });
+    const container = document.getElementById('canvas-container');
+    
+    const elements = {
+      controls: document.querySelector('.controls'), startBtn: document.getElementById('start-btn'),
+      switchBtn: document.getElementById('switch-cam-btn'), drawBtn: document.getElementById('draw-btn'),
+      resetBtn: document.getElementById('reset-btn'), undoBtn: document.getElementById('undo-btn'),
+      settingsBtn: document.getElementById('settings-btn'), status: document.getElementById('status'), 
+      winnerDisplay: document.getElementById('winner-display')
+    };
+
+    // --- 可調整參數設定檔 ---
+    const config = {
+        inputSize: 640,
+        confidenceThreshold: 0.45,
+        iouThreshold: 0.4,
+        arrowSpeed: 0.08
+    };
+
+    const state = {
+      detectedFaces: [], manualFaces: [], frozenFaces: [],
+      isRolling: false, isFrozen: false, showWinnerView: false, 
+      winnerIndex: -1, isCameraRunning: false, isDetecting: false, 
+      isLooping: false, useFrontCamera: true, snapshotImage: null,
+      globalAlpha: 0, globalAlphaDir: 0.05
+    };
+
+    const fx = {
+      isShooting: false, arrowProgress: 0, arrowStart: {x:0, y:0}, arrowTarget: {x:0, y:0},
+      trail: [], explosionFrame: 0, particles: [], clickRipples: [],
+      zoomProgress: 0, zoomSrc: {x:0, y:0, w:0, h:0}, zoomDst: {x:0, y:0, w:0, h:0}
+    };
+
+    // --- ONNX AI 初始化設定 ---
+    let mySession;
+    const tensorCanvas = document.createElement('canvas');
+    const tensorCtx = tensorCanvas.getContext('2d', { willReadFrequently: true });
+    
+    // 確保 Tensor Canvas 尺寸與設定檔一致
+    function updateTensorSize() {
+        tensorCanvas.width = config.inputSize;
+        tensorCanvas.height = config.inputSize;
+    }
+    updateTensorSize();
+
+    async function initModel() {
+    try {
+        // 1. 強制指向穩定的 1.14.0 雲端核心，放棄讀取本地端
+        ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/';
+        
+        // 2. 強制單執行緒：破解 GitHub Pages 的跨來源安全阻擋 (COOP/COEP)
+        ort.env.wasm.numThreads = 1; 
+        
+        // 3. 關閉 SIMD 加速：確保 iOS (iPhone) 與較舊的手機瀏覽器也能 100% 執行
+        ort.env.wasm.simd = false;
+        
+        mySession = await ort.InferenceSession.create('./yolov8n-face-lindevs.onnx', { executionProviders: ['wasm'] });
+        elements.status.innerText = "✅ AI 引擎準備完畢 | 請按下「啟動相機」";
+        elements.startBtn.disabled = false;
+    } catch (e) {
+        elements.status.innerText = "❌ 模型載入失敗，請確認 onnx 檔案存在";
+        console.error("詳細錯誤訊息:", e);
+    }
+}
+    initModel();
+
+    // --- 設定面板互動邏輯 ---
+    const modal = document.getElementById('settings-modal');
+    elements.settingsBtn.addEventListener('click', () => modal.style.display = 'flex');
+    document.getElementById('close-settings-btn').addEventListener('click', () => modal.style.display = 'none');
+
+    document.getElementById('cfg-res').addEventListener('input', (e) => {
+        config.inputSize = parseInt(e.target.value);
+        document.getElementById('val-res').innerText = config.inputSize;
+        updateTensorSize(); // 即時更新解析度畫布
+    });
+    document.getElementById('cfg-conf').addEventListener('input', (e) => {
+        config.confidenceThreshold = parseFloat(e.target.value);
+        document.getElementById('val-conf').innerText = config.confidenceThreshold.toFixed(2);
+    });
+    document.getElementById('cfg-speed').addEventListener('input', (e) => {
+        config.arrowSpeed = parseFloat(e.target.value);
+        let speedText = config.arrowSpeed > 0.1 ? "極速" : config.arrowSpeed < 0.05 ? "緩慢" : "適中";
+        document.getElementById('val-speed').innerText = speedText;
+    });
+
+    async function startCamera() {
+      if (window.stream) window.stream.getTracks().forEach(t => t.stop());
+      elements.status.innerText = "⏳ 正在啟動相機...";
+      state.isDetecting = false; 
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: state.useFrontCamera ? "user" : "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
+        window.stream = stream;
+        videoElement.onloadedmetadata = () => {
+          videoElement.play(); state.isCameraRunning = true;
+          elements.startBtn.style.display = 'none'; elements.switchBtn.style.display = 'inline-block';
+          canvasElement.width = videoElement.videoWidth; canvasElement.height = videoElement.videoHeight;
+          updateStatus(); if (!state.isLooping) { state.isLooping = true; detectLoop(); }
+        };
+        videoElement.srcObject = stream;
+      } catch (err) { alert("無法啟動相機，請確認權限。"); }
+    }
+
+    async function detectLoop() {
+      if (!state.isCameraRunning) return;
+      state.globalAlpha += state.globalAlphaDir;
+      if(state.globalAlpha > 0.8 || state.globalAlpha < 0.2) state.globalAlphaDir *= -1;
+
+      if (!state.isFrozen) {
+        canvasCtx.save();
+        if (state.useFrontCamera) { canvasCtx.translate(canvasElement.width, 0); canvasCtx.scale(-1, 1); }
+        canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.restore();
+
+        trackManualFacesHybrid();
+        
+        if (mySession && !state.isDetecting && videoElement.readyState >= 2) {
+          state.isDetecting = true;
+          
+          let currentSize = config.inputSize;
+          tensorCtx.drawImage(canvasElement, 0, 0, currentSize, currentSize);
+          const imgData = tensorCtx.getImageData(0, 0, currentSize, currentSize).data;
+          
+          const float32Data = new Float32Array(3 * currentSize * currentSize);
+          for (let i = 0; i < currentSize * currentSize; i++) {
+              float32Data[i] = imgData[i * 4] / 255.0; 
+              float32Data[i + currentSize * currentSize] = imgData[i * 4 + 1] / 255.0; 
+              float32Data[i + 2 * currentSize * currentSize] = imgData[i * 4 + 2] / 255.0; 
+          }
+          // ONNX 模型支援動態長寬 (需為32倍數)，我們將張量維度設為變數
+          const inputTensor = new ort.Tensor('float32', float32Data, [1, 3, currentSize, currentSize]);
+
+          try {
+              const feeds = {}; feeds[mySession.inputNames[0]] = inputTensor;
+              const results = await mySession.run(feeds);
+              const output = results[mySession.outputNames[0]].data;
+              state.detectedFaces = parseYOLOOutput(output, canvasElement.width, canvasElement.height, currentSize);
+          } catch (e) { console.error("推論錯誤:", e); } 
+          finally { state.isDetecting = false; }
+        }
+
+        const validAiFaces = [];
+        state.detectedFaces.forEach(aiFace => {
+           let isCovered = state.manualFaces.some(mFace => Math.hypot((mFace.x+mFace.w/2) - (aiFace.x+aiFace.w/2), (mFace.y+mFace.h/2) - (aiFace.y+aiFace.h/2)) < mFace.w * 0.8);
+           if (!isCovered) validAiFaces.push(aiFace);
+        });
+
+        const allFaces = [...validAiFaces, ...state.manualFaces];
+        updateStatus(allFaces.length); drawBoxes(allFaces);
+
+        for (let i = fx.clickRipples.length - 1; i >= 0; i--) {
+          let r = fx.clickRipples[i]; r.radius += 4; r.alpha -= 0.04;     
+          canvasCtx.save(); canvasCtx.beginPath(); canvasCtx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+          canvasCtx.strokeStyle = `rgba(0, 255, 127, ${Math.max(0, r.alpha)})`; canvasCtx.lineWidth = 3; canvasCtx.stroke(); canvasCtx.restore();
+          if (r.alpha <= 0) fx.clickRipples.splice(i, 1); 
+        }
+
+      } else {
+        if (state.snapshotImage) canvasCtx.drawImage(state.snapshotImage, 0, 0);
+
+        if (state.showWinnerView) {
+            if (fx.zoomProgress < 1) { fx.zoomProgress += 0.035; if (fx.zoomProgress > 1) fx.zoomProgress = 1; }
+            const p = 1 - Math.pow(1 - fx.zoomProgress, 4); 
+
+            canvasCtx.fillStyle = `rgba(0, 0, 0, ${0.4 * p})`; canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+
+            const curX = fx.zoomSrc.x + (fx.zoomDst.x - fx.zoomSrc.x) * p;
+            const curY = fx.zoomSrc.y + (fx.zoomDst.y - fx.zoomSrc.y) * p;
+            const curW = fx.zoomSrc.w + (fx.zoomDst.w - fx.zoomSrc.w) * p;
+            const curH = fx.zoomSrc.h + (fx.zoomDst.h - fx.zoomSrc.h) * p;
+
+            canvasCtx.save();
+            canvasCtx.shadowColor = `rgba(255, 215, 0, ${p})`; canvasCtx.shadowBlur = 40 * p; canvasCtx.lineWidth = 6 * p; canvasCtx.strokeStyle = `rgba(255, 215, 0, ${p})`;
+            canvasCtx.drawImage(state.snapshotImage, fx.zoomSrc.x, fx.zoomSrc.y, fx.zoomSrc.w, fx.zoomSrc.h, curX, curY, curW, curH);
+            if (p > 0.1) canvasCtx.strokeRect(curX, curY, curW, curH);
+            
+            if (p > 0.3) {
+                canvasCtx.shadowBlur = 10 * p; canvasCtx.fillStyle = `rgba(255, 215, 0, ${p})`;
+                const fontSize = 16 + (14 * p); 
+                canvasCtx.font = `bold ${fontSize}px sans-serif`; canvasCtx.textAlign = "center"; canvasCtx.textBaseline = "bottom"; 
+                canvasCtx.fillText("🎉 天選之人 🎉", curX + curW / 2, curY - 12);
+            }
+            canvasCtx.restore();
+            if (fx.particles.length > 0) updateAndDrawConfetti();
+        } else {
+            drawBoxes(state.frozenFaces);
+            if (fx.isShooting) updateAndDrawArrow();
+            if (fx.particles.length > 0) updateAndDrawConfetti();
+        }
+      }
+      requestAnimationFrame(detectLoop);
+    }
+
+    function parseYOLOOutput(outputData, rawWidth, rawHeight, currentSize) {
+        let faces = [];
+        // 動態計算當前解析度的錨點數量 (YOLOv8 架構算法)
+        const numAnchors = Math.floor((currentSize/8)**2 + (currentSize/16)**2 + (currentSize/32)**2); 
+        
+        for (let i = 0; i < numAnchors; i++) {
+            let score = outputData[4 * numAnchors + i]; 
+            if (score > config.confidenceThreshold) {
+                let cx = outputData[0 * numAnchors + i]; let cy = outputData[1 * numAnchors + i];
+                let w = outputData[2 * numAnchors + i]; let h = outputData[3 * numAnchors + i];
+                
+                let scaleX = rawWidth / currentSize; let scaleY = rawHeight / currentSize;
+                faces.push({
+                    x: (cx - w / 2) * scaleX, y: (cy - h / 2) * scaleY,
+                    w: w * scaleX, h: h * scaleY,
+                    score: score, isManual: false
+                });
+            }
+        }
+        return applyNMS(faces, config.iouThreshold);
+    }
+
+    function applyNMS(boxes, iouThres) {
+        boxes.sort((a, b) => b.score - a.score);
+        const result = [];
+        while (boxes.length > 0) {
+            const current = boxes.shift(); result.push(current);
+            boxes = boxes.filter(box => {
+                const intersectX = Math.max(current.x, box.x); const intersectY = Math.max(current.y, box.y);
+                const intersectW = Math.max(0, Math.min(current.x + current.w, box.x + box.w) - intersectX);
+                const intersectH = Math.max(0, Math.min(current.y + current.h, box.y + box.h) - intersectY);
+                const intersectArea = intersectW * intersectH;
+                const unionArea = current.w * current.h + box.w * box.h - intersectArea;
+                return (intersectArea / unionArea) < iouThres;
+            });
+        }
+        return result;
+    }
+
+    function trackManualFacesHybrid() {
+      if (!state.isCameraRunning || state.isFrozen || state.manualFaces.length === 0) return;
+      const tSize = 30; const searchRadius = 60; 
+      state.manualFaces.forEach(face => {
+        let closestAI = null; let minAiDist = Infinity;
+        let faceCenterX = face.x + face.w / 2; let faceCenterY = face.y + face.h / 2;
+        state.detectedFaces.forEach(aiFace => {
+          let aiCenterX = aiFace.x + aiFace.w / 2; let aiCenterY = aiFace.y + aiFace.h / 2;
+          let dist = Math.hypot(faceCenterX - aiCenterX, faceCenterY - aiCenterY);
+          if (dist < minAiDist) { minAiDist = dist; closestAI = aiFace; }
+        });
+        if (closestAI && minAiDist < face.w * 0.8) {
+          face.x = closestAI.x; face.y = closestAI.y; face.w = closestAI.w; face.h = closestAI.h; face.lostCount = 0;
+          let tX = Math.max(0, Math.min(canvasElement.width - tSize, face.x + face.w / 2 - tSize / 2));
+          let tY = Math.max(0, Math.min(canvasElement.height - tSize, face.y + face.h / 2 - tSize / 2));
+          face.lastTrackX = tX; face.lastTrackY = tY; face.template = canvasCtx.getImageData(tX, tY, tSize, tSize);
+          return; 
+        }
+        let sX = Math.max(0, face.lastTrackX - searchRadius); let sY = Math.max(0, face.lastTrackY - searchRadius);
+        let sW = Math.min(canvasElement.width - sX, searchRadius * 2); let sH = Math.min(canvasElement.height - sY, searchRadius * 2);
+        if (sW <= tSize || sH <= tSize) { face.lostCount++; return; }
+        const searchData = canvasCtx.getImageData(sX, sY, sW, sH).data; const templ = face.template.data;
+        let minDiff = Infinity; let bestX = 0, bestY = 0;
+        for (let y = 0; y <= sH - tSize; y += 3) {
+          for (let x = 0; x <= sW - tSize; x += 3) {
+            let diff = 0;
+            for (let i = 0; i < tSize * tSize; i += 2) {
+               const tIdx = i * 4 + 1; const sIdx = ((y + Math.floor(i/tSize)) * sW + (x + i%tSize)) * 4 + 1;
+               diff += Math.abs(templ[tIdx] - searchData[sIdx]); if (diff > minDiff) break;
+            }
+            if (diff < minDiff) { minDiff = diff; bestX = x; bestY = y; }
+          }
+        }
+        if (minDiff < 18000) { 
+           face.x += (sX + bestX) - face.lastTrackX; face.y += (sY + bestY) - face.lastTrackY;
+           face.lastTrackX = sX + bestX; face.lastTrackY = sY + bestY; face.lostCount = 0;
+           face.template = canvasCtx.getImageData(face.lastTrackX, face.lastTrackY, tSize, tSize);
+        } else { face.lostCount++; }
+      });
+    }
+
+    canvasElement.addEventListener('click', (event) => {
+      if (!state.isCameraRunning || state.isFrozen) return;
+      const rect = canvasElement.getBoundingClientRect();
+      let realX = (event.clientX - rect.left) * (canvasElement.width / rect.width);
+      let realY = (event.clientY - rect.top) * (canvasElement.height / rect.height);
+      
+      fx.clickRipples.push({ x: realX, y: realY, radius: 0, alpha: 1 });
+      let clickedFace = state.manualFaces.find(f => realX >= f.x && realX <= f.x + f.w && realY >= f.y && realY <= f.y + f.h);
+      if (clickedFace) { elements.status.innerText = "⚠️ 該區域已經被鎖定過了！"; clickedFace.flashTimer = 15; return; }
+
+      const w = canvasElement.width * 0.06; const h = canvasElement.height * 0.1;
+      const x = Math.max(0, Math.min(canvasElement.width - w, realX - w/2));
+      const y = Math.max(0, Math.min(canvasElement.height - h, realY - h/2));
+      const tSize = 30; 
+      const tX = Math.max(0, Math.min(canvasElement.width - tSize, x + w/2 - tSize/2));
+      const tY = Math.max(0, Math.min(canvasElement.height - tSize, y + h/2 - tSize/2));
+      
+      state.manualFaces.push({ x, y, w, h, template: canvasCtx.getImageData(tX, tY, tSize, tSize), lastTrackX: tX, lastTrackY: tY, isManual: true, lostCount: 0, flashTimer: 0 });
+      elements.undoBtn.style.display = 'inline-block'; updateStatus();
+    });
+
+    elements.undoBtn.addEventListener('click', () => {
+      state.manualFaces.pop(); if(state.manualFaces.length === 0) elements.undoBtn.style.display = 'none'; updateStatus();
+    });
+
+    function drawBoxes(faces) {
+      if (!faces) return;
+      faces.forEach((face, index) => {
+        let isFlashing = face.flashTimer && face.flashTimer > 0; let isLost = face.lostCount > 10; 
+        let baseColor = face.isManual ? 'rgba(0, 255, 127, 0.9)' : 'rgba(0, 229, 255, 0.9)';
+        let color = baseColor; let lineWidth = face.isManual ? 4 : 3; let labelText = face.isManual ? "📌 手動" : "🤖 YOLO鎖定";
+
+        if (isFlashing) { face.flashTimer--; color = '#ff0055'; lineWidth = 6; canvasCtx.shadowColor = "#ff0055"; canvasCtx.shadowBlur = 20; } 
+        else if (isLost && face.isManual && !state.isFrozen) { color = `rgba(255, 165, 0, 0.9)`; labelText = "⚠️ 丟失目標"; } 
+        else if (state.isRolling) {
+           if (index === state.winnerIndex) { color = '#ff00ea'; lineWidth = 6; canvasCtx.shadowColor = "#ff00ea"; canvasCtx.shadowBlur = 20; } 
+           else { color = 'rgba(255, 255, 255, 0.35)'; lineWidth = 2; canvasCtx.shadowBlur = 0; }
+        } else if (index === state.winnerIndex && state.isFrozen && !fx.isShooting) {
+           color = '#ffd700'; lineWidth = 8; canvasCtx.shadowColor = "#ffd700"; canvasCtx.shadowBlur = 30;
+        } else if (!state.isFrozen) { canvasCtx.shadowColor = baseColor; canvasCtx.shadowBlur = 15 * state.globalAlpha; }
+
+        canvasCtx.save(); canvasCtx.beginPath(); canvasCtx.roundRect(face.x, face.y, face.w, face.h, 10);
+        canvasCtx.lineWidth = lineWidth; canvasCtx.strokeStyle = color;
+        if (face.isManual && !state.isFrozen && !isLost) { canvasCtx.setLineDash([8, 8]); } 
+        else if (isLost && !state.isFrozen) { canvasCtx.setLineDash([4, 4]); } else { canvasCtx.setLineDash([]); }
+        canvasCtx.stroke();
+        if (!state.isRolling && !(index === state.winnerIndex && state.isFrozen)) {
+           canvasCtx.font = "bold 16px sans-serif"; canvasCtx.fillStyle = color; canvasCtx.shadowBlur = 0; 
+           canvasCtx.fillText(labelText, face.x, face.y - 8);
+        }
+        canvasCtx.restore();
+      });
+    }
+
+    elements.drawBtn.addEventListener('click', () => {
+      const validAiFaces = [];
+      state.detectedFaces.forEach(aiFace => {
+         let isCovered = state.manualFaces.some(mFace => Math.hypot((mFace.x+mFace.w/2) - (aiFace.x+aiFace.w/2), (mFace.y+mFace.h/2) - (aiFace.y+aiFace.h/2)) < mFace.w * 0.8);
+         if (!isCovered) validAiFaces.push(aiFace);
+      });
+      const allFaces = [...validAiFaces, ...state.manualFaces];
+      if (allFaces.length === 0) return;
+
+      state.isFrozen = true; state.frozenFaces = allFaces;
+      state.snapshotImage = new Image(); state.snapshotImage.src = canvasElement.toDataURL();
+
+      elements.drawBtn.style.display = 'none'; elements.switchBtn.style.display = 'none'; 
+      elements.undoBtn.style.display = 'none'; elements.settingsBtn.style.display = 'none';
+      container.classList.add('rolling'); elements.status.innerText = "🔒 鎖定目標 | 演算中...";
+      state.isRolling = true; elements.winnerDisplay.style.display = 'block'; elements.winnerDisplay.innerText = "⚡ 正在尋找天選之人 ⚡";
+      
+      let rollCount = 0;
+      const rollInterval = setInterval(() => {
+        state.winnerIndex = Math.floor(Math.random() * state.frozenFaces.length); rollCount++;
+        if (rollCount >= 35) { clearInterval(rollInterval); finishLottery(); }
+      }, 70); 
+    });
+
+    function finishLottery() {
+      state.isRolling = false; container.classList.remove('rolling');
+      elements.winnerDisplay.innerText = "🚀 發射鎖定..."; prepareArrow(); 
+    }
+
+    function prepareArrow() {
+      fx.arrowStart = { x: canvasElement.width/2, y: canvasElement.height }; 
+      const target = state.frozenFaces[state.winnerIndex];
+      fx.arrowTarget = { x: target.x + target.w/2, y: target.y + target.h/2 };
+      fx.isShooting = true; fx.arrowProgress = 0; fx.explosionFrame = 0; fx.trail = [];
+    }
+
+    function updateAndDrawArrow() {
+      // 箭矢速度套用設定檔參數
+      if (fx.arrowProgress < 1) { fx.arrowProgress += config.arrowSpeed; } else {
+        fx.explosionFrame++;
+        if (fx.explosionFrame > 20) { fx.isShooting = false; triggerConfetti(); showWinnerDetail(); return; }
+      }
+      const p = Math.min(fx.arrowProgress, 1);
+      const curX = fx.arrowStart.x + (fx.arrowTarget.x - fx.arrowStart.x) * p;
+      const curY = fx.arrowStart.y + (fx.arrowTarget.y - fx.arrowStart.y) * Math.pow(p, 0.8); 
+      if(p < 1) { fx.trail.push({x: curX, y: curY}); if(fx.trail.length > 30) fx.trail.shift(); }
+
+      canvasCtx.save(); canvasCtx.beginPath();
+      if(fx.trail.length > 0) canvasCtx.moveTo(fx.trail[0].x, fx.trail[0].y);
+      fx.trail.forEach(pt => canvasCtx.lineTo(pt.x, pt.y));
+      canvasCtx.strokeStyle = "rgba(0, 229, 255, 0.8)"; canvasCtx.lineWidth = 10; canvasCtx.lineCap = "round";
+      canvasCtx.shadowColor = "#00e5ff"; canvasCtx.shadowBlur = 20; canvasCtx.stroke(); canvasCtx.restore();
+
+      if (p < 1) {
+        canvasCtx.beginPath(); canvasCtx.arc(curX, curY, 10, 0, Math.PI*2);
+        canvasCtx.fillStyle = "#fff"; canvasCtx.shadowColor = "#00e5ff"; canvasCtx.shadowBlur = 20; canvasCtx.fill();
+        if (Math.random() > 0.5) fx.particles.push({x: curX, y: curY, vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10, size: Math.random()*5, color: '#ffd700', angle: 0, spin: 0});
+      } else {
+        canvasCtx.save(); canvasCtx.translate(fx.arrowTarget.x, fx.arrowTarget.y);
+        const radius = fx.explosionFrame * 8; const alpha = 1 - (fx.explosionFrame / 20); 
+        canvasCtx.beginPath(); canvasCtx.arc(0, 0, radius, 0, Math.PI * 2);
+        canvasCtx.fillStyle = `rgba(255, 215, 0, ${alpha})`; canvasCtx.fill();
+        canvasCtx.lineWidth = 4; canvasCtx.strokeStyle = `rgba(255, 255, 255, ${alpha})`; canvasCtx.stroke(); canvasCtx.restore();
+      }
+    }
+
+    function triggerConfetti() {
+      const colors = ['#f00', '#0f0', '#00f', '#ff0', '#0ff', '#f0f', '#fff'];
+      for(let i=0; i<150; i++) {
+        fx.particles.push({
+          x: canvasElement.width / 2, y: canvasElement.height / 2,
+          vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40 - 10,
+          size: Math.random() * 8 + 4, color: colors[Math.floor(Math.random() * colors.length)],
+          angle: Math.random() * 360, spin: (Math.random() - 0.5) * 10
+        });
+      }
+    }
+
+    function updateAndDrawConfetti() {
+      canvasCtx.save();
+      for(let i = fx.particles.length - 1; i >= 0; i--) {
+        let p = fx.particles[i]; p.vy += 0.8; p.x += p.vx; p.y += p.vy; p.angle += p.spin;
+        canvasCtx.translate(p.x, p.y); canvasCtx.rotate(p.angle * Math.PI / 180);
+        canvasCtx.fillStyle = p.color; canvasCtx.fillRect(-p.size/2, -p.size/2, p.size, p.size);
+        canvasCtx.rotate(-p.angle * Math.PI / 180); canvasCtx.translate(-p.x, -p.y);
+        if(p.y > canvasElement.height) fx.particles.splice(i, 1);
+      }
+      canvasCtx.restore();
+    }
+
+    function showWinnerDetail() {
+      elements.winnerDisplay.style.display = 'none'; state.showWinnerView = true; fx.zoomProgress = 0; 
+      const face = state.frozenFaces[state.winnerIndex]; const padding = 0.5;
+      let extW = face.w * (1 + padding); let extH = face.h * (1 + padding);
+      let extX = face.x - (face.w * padding) / 2; let extY = face.y - (face.h * padding) / 2;
+      fx.zoomSrc = { x: extX, y: extY, w: extW, h: extH };
+      const scale = Math.min((canvasElement.width * 0.3) / extW, (canvasElement.height * 0.35) / extH);
+      let targetW = extW * scale; let targetH = extH * scale;
+      let targetX = (canvasElement.width - targetW) / 2; let targetY = (canvasElement.height - targetH) / 2;
+      fx.zoomDst = { x: targetX, y: targetY, w: targetW, h: targetH };
+      elements.resetBtn.style.display = 'inline-block';
+    }
+
+    elements.resetBtn.addEventListener('click', () => {
+      state.isFrozen = false; state.showWinnerView = false; state.winnerIndex = -1;
+      state.frozenFaces = []; state.manualFaces = []; fx.particles = [];
+      elements.winnerDisplay.style.display = 'none'; elements.winnerDisplay.innerText = "";
+      elements.drawBtn.style.display = 'inline-block'; elements.switchBtn.style.display = 'inline-block';
+      elements.settingsBtn.style.display = 'inline-block';
+      if(state.manualFaces.length > 0) elements.undoBtn.style.display = 'inline-block';
+      elements.resetBtn.style.display = 'none'; elements.status.innerText = "✔️ 系統已重置 | 繼續偵測中...";
+    });
+
+    function updateStatus(c = state.detectedFaces.length + state.manualFaces.length) {
+      if (!state.isFrozen) {
+        if (c > 0) { elements.drawBtn.disabled = false; elements.status.innerText = `🟢 準備就緒 | 總鎖定人數: ${c} (手動: ${state.manualFaces.length})`; } 
+        else { elements.drawBtn.disabled = true; elements.status.innerText = `🔴 等待目標... (可點擊畫面手動圈選)`; }
+      }
+    }
+
+    elements.startBtn.addEventListener('click', startCamera);
+    elements.switchBtn.addEventListener('click', () => { state.useFrontCamera = !state.useFrontCamera; startCamera(); });
+  </script>
+</body>
+</html>
